@@ -1,0 +1,128 @@
+const API_BASE = '/api'
+const TOKEN_KEY = 'club-activity-token'
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setToken(token: string | null) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const token = getToken()
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  }
+  if (token) {
+    (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  const data = await res.json().catch(() => ({}))
+
+  if (!res.ok) {
+    throw new Error(data.error || `Request failed: ${res.status}`)
+  }
+  return data as T
+}
+
+export const authApi = {
+  register: (body: {
+    email: string
+    password: string
+    displayName?: string
+    clubRole?: string
+    bio?: string
+  }) => request<{ user: AuthUser; token: string }>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
+  login: (email: string, password: string) =>
+    request<{ user: AuthUser; token: string }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  me: () => request<{ user: AuthUser }>('/auth/me'),
+  checkEmail: (email: string) =>
+    request<{ registered: boolean }>(`/auth/check-email?email=${encodeURIComponent(email)}`),
+  updateProfile: (profile: { displayName?: string; clubRole?: string; bio?: string }) =>
+    request<{ user: AuthUser }>('/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(profile),
+    }),
+}
+
+export const activitiesApi = {
+  getEvents: () => request<Array<EventDoc>>('/events'),
+  createEvent: (body: Omit<EventDoc, 'id'>) =>
+    request<EventDoc>('/events', { method: 'POST', body: JSON.stringify(body) }),
+  updateEvent: (id: string, body: Partial<EventDoc>) =>
+    request<EventDoc>(`/events/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  getTasks: () => request<Array<TaskDoc>>('/tasks'),
+  createTask: (body: Omit<TaskDoc, 'id'>) =>
+    request<TaskDoc>('/tasks', { method: 'POST', body: JSON.stringify(body) }),
+  updateTask: (id: string, body: Partial<TaskDoc>) =>
+    request<TaskDoc>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  getBudgetItems: () => request<Array<BudgetItemDoc>>('/budget'),
+  createBudgetItem: (body: Omit<BudgetItemDoc, 'id'>) =>
+    request<BudgetItemDoc>('/budget', { method: 'POST', body: JSON.stringify(body) }),
+  updateBudgetItem: (id: string, body: Partial<BudgetItemDoc>) =>
+    request<BudgetItemDoc>(`/budget/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  getMeetings: () => request<Array<MeetingDoc>>('/meetings'),
+  createMeeting: (body: Omit<MeetingDoc, 'id'>) =>
+    request<MeetingDoc>('/meetings', { method: 'POST', body: JSON.stringify(body) }),
+}
+
+export interface AuthUser {
+  id: string
+  email: string
+  profile: { displayName?: string; clubRole?: string; bio?: string }
+}
+
+export interface EventDoc {
+  id: string
+  name: string
+  date: string
+  location: string
+  priority: string
+  status: string
+  budgetAllocated: number
+  members?: string[]
+  isOwner?: boolean
+  ownerEmail?: string
+}
+
+export interface TaskDoc {
+  id: string
+  eventId: string
+  title: string
+  assignee: string
+  dueDate: string
+  priority: string
+  completed: boolean
+}
+
+export interface BudgetItemDoc {
+  id: string
+  eventId: string
+  label: string
+  amount: number
+  spent: boolean
+}
+
+export interface MeetingDoc {
+  id: string
+  eventId?: string
+  dateTime: string
+  location: string
+  agenda: string
+}
