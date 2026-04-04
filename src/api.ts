@@ -58,12 +58,32 @@ export const authApi = {
     }),
 }
 
+export interface PublicEventDoc {
+  id: string
+  name: string
+  date: string
+  location: string
+}
+
+export const publicApi = {
+  getEvents: async (): Promise<PublicEventDoc[]> => {
+    const res = await fetch(`${API_BASE}/public/events`, { cache: 'no-store' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error((data as { error?: string }).error || `Request failed: ${res.status}`)
+    }
+    return data as PublicEventDoc[]
+  },
+}
+
 export const activitiesApi = {
   getEvents: () => request<Array<EventDoc>>('/events'),
   createEvent: (body: Omit<EventDoc, 'id'>) =>
     request<EventDoc>('/events', { method: 'POST', body: JSON.stringify(body) }),
   updateEvent: (id: string, body: Partial<EventDoc>) =>
     request<EventDoc>(`/events/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteEvent: (id: string) =>
+    request<void>(`/events/${id}`, { method: 'DELETE' }),
 
   getTasks: () => request<Array<TaskDoc>>('/tasks'),
   createTask: (body: Omit<TaskDoc, 'id'>) =>
@@ -99,6 +119,7 @@ export interface EventDoc {
   members?: string[]
   isOwner?: boolean
   ownerEmail?: string
+  publicOnCalendar?: boolean
 }
 
 export interface TaskDoc {

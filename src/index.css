@@ -281,6 +281,26 @@ body {
   margin: 2px 0 6px !important;
 }
 
+label.form-checkbox {
+  flex-direction: row !important;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.form-checkbox input[type='checkbox'] {
+  margin-top: 3px;
+  width: auto;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.form-checkbox > span {
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .members-input-row {
   display: flex;
   gap: 8px;
@@ -453,6 +473,36 @@ body {
 .btn.ghost:hover {
   background: rgba(15, 23, 42, 0.9);
   color: var(--text);
+}
+
+.btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.55);
+  color: #fecaca;
+}
+
+.btn.danger:hover {
+  background: rgba(239, 68, 68, 0.28);
+  border-color: rgba(248, 113, 113, 0.85);
+}
+
+.form-actions-spread {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.form-actions-left,
+.form-actions-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.form-actions-right {
+  margin-left: auto;
 }
 
 .list {
@@ -661,6 +711,264 @@ body {
   background: rgba(234, 179, 8, 0.18);
 }
 
+/* Dashboard calendar */
+.dashboard-calendar-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-calendar-toolbar {
+  margin-top: 10px;
+}
+
+.calendar-view-toggle {
+  margin: 0;
+}
+
+.dashboard-calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cal-nav-btn {
+  padding: 6px 8px !important;
+  min-width: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cal-today-btn {
+  margin-left: 4px;
+  font-size: 0.8rem !important;
+  padding: 6px 12px !important;
+}
+
+.dashboard-calendar-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  min-width: 9.5rem;
+  text-align: center;
+  color: var(--text);
+}
+
+.dashboard-calendar-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.cal-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cal-legend::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.cal-legend-event::before {
+  background: rgba(34, 197, 94, 0.45);
+  border: 1px solid var(--accent-strong);
+}
+
+.cal-legend-task::before {
+  background: rgba(59, 130, 246, 0.35);
+  border: 1px solid rgba(96, 165, 250, 0.85);
+}
+
+.dashboard-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dashboard-calendar-weekdays.cal-week-header {
+  text-transform: none;
+}
+
+.dashboard-calendar-weekday {
+  text-align: center;
+  padding: 4px 2px;
+}
+
+.cal-week-header .dashboard-calendar-weekday {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+}
+
+.cal-weekday-name {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cal-weekday-date {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dashboard-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.dashboard-calendar-grid.cal-week-view .dashboard-calendar-cell {
+  min-height: 168px;
+}
+
+.dashboard-calendar-grid.cal-week-view .dashboard-calendar-items {
+  max-height: none;
+}
+
+.dashboard-calendar-cell {
+  min-height: 88px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.5);
+  padding: 5px 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.dashboard-calendar-cell.cal-other-month {
+  opacity: 0.38;
+}
+
+.dashboard-calendar-cell.cal-cell-today {
+  border-color: rgba(34, 197, 94, 0.65);
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.2);
+}
+
+.dashboard-calendar-daynum {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.dashboard-calendar-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.cal-item {
+  font-size: 0.65rem;
+  line-height: 1.25;
+  padding: 2px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.cal-item-event {
+  background: var(--accent-soft);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  color: var(--accent-strong);
+}
+
+.cal-item-task {
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  color: #93c5fd;
+}
+
+.cal-item-task.cal-item-done {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+@media (max-width: 700px) {
+  .dashboard-calendar-cell {
+    min-height: 72px;
+    padding: 4px;
+  }
+
+  .cal-item {
+    font-size: 0.6rem;
+  }
+}
+
+/* Public calendar (home) */
+.public-calendar-page {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.public-calendar-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.public-calendar-title {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.03em;
+}
+
+.public-calendar-tagline {
+  margin: 6px 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.45;
+  max-width: 36rem;
+}
+
+.member-login-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.public-calendar-status {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.public-calendar-grid-wrap {
+  width: 100%;
+}
+
 /* Auth screen */
 .auth-screen {
   min-height: 100vh;
@@ -668,6 +976,29 @@ body {
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+
+.auth-screen-with-nav {
+  flex-direction: column;
+  gap: 0;
+  justify-content: flex-start;
+  padding-top: 20px;
+}
+
+.auth-screen-top {
+  width: 100%;
+  max-width: 400px;
+  margin-bottom: 12px;
+}
+
+.auth-back-link {
+  font-size: 0.88rem;
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+
+.auth-back-link:hover {
+  text-decoration: underline;
 }
 .auth-card {
   width: 100%;

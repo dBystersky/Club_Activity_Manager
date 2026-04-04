@@ -11,6 +11,33 @@ router.use(authMiddleware)
 
 const userEmail = (req) => (req.user?.email || '').trim().toLowerCase()
 
+/** Persist only schema fields; normalise publicOnCalendar so it always saves correctly. */
+function eventWritePayload(body) {
+  const members = Array.isArray(body.members) ? body.members : []
+  const pr = body.publicOnCalendar
+  const publicOnCalendar =
+    pr === true ||
+    pr === 'true' ||
+    pr === 1 ||
+    pr === 'on' ||
+    pr === '1'
+
+  return {
+    name: typeof body.name === 'string' ? body.name : String(body.name ?? ''),
+    date: typeof body.date === 'string' ? body.date : String(body.date ?? ''),
+    location: typeof body.location === 'string' ? body.location : String(body.location ?? ''),
+    priority: ['low', 'medium', 'high'].includes(body.priority) ? body.priority : 'medium',
+    status: ['planning', 'confirmed', 'completed'].includes(body.status)
+      ? body.status
+      : 'planning',
+    budgetAllocated: Number.isFinite(Number(body.budgetAllocated))
+      ? Number(body.budgetAllocated)
+      : 0,
+    members,
+    publicOnCalendar,
+  }
+}
+
 // Events – owned by user OR shared with user (members contains their email)
 router.get('/events', async (req, res) => {
   const email = userEmail(req)
@@ -36,7 +63,10 @@ router.get('/events', async (req, res) => {
 })
 
 router.post('/events', async (req, res) => {
-  const ev = await ClubEvent.create({ ...req.body, userId: req.user._id })
+  const ev = await ClubEvent.create({
+    ...eventWritePayload(req.body),
+    userId: req.user._id,
+  })
   const obj = ev.toObject()
   res.status(201).json({
     ...obj,
@@ -55,8 +85,8 @@ router.patch('/events/:id', async (req, res) => {
   }
   const updated = await ClubEvent.findByIdAndUpdate(
     req.params.id,
-    { $set: req.body },
-    { new: true }
+    { $set: eventWritePayload(req.body) },
+    { new: true, runValidators: true },
   )
   const obj = updated.toObject()
   res.json({
@@ -65,6 +95,22 @@ router.patch('/events/:id', async (req, res) => {
     isOwner: true,
     ownerEmail: req.user.email,
   })
+})
+
+router.delete('/events/:id', async (req, res) => {
+  const ev = await ClubEvent.findById(req.params.id)
+  if (!ev) return res.status(404).json({ error: 'Event not found' })
+  if (ev.userId.toString() !== req.user._id.toString()) {
+    return res.status(403).json({ error: 'Only the event owner can delete this event' })
+  }
+  const idStr = ev._id.toString()
+  await Promise.all([
+    Task.deleteMany({ eventId: idStr }),
+    BudgetItem.deleteMany({ eventId: idStr }),
+    Meeting.updateMany({ eventId: idStr }, { $set: { eventId: '' } }),
+  ])
+  await ClubEvent.findByIdAndDelete(req.params.id)
+  res.status(204).send()
 })
 
 // Tasks

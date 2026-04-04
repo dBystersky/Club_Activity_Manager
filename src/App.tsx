@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AuthScreen } from './AuthScreen'
+import { Navigate, useNavigate } from 'react-router-dom'
+import { DashboardCalendar } from './components/DashboardCalendar'
 import {
   activitiesApi,
   authApi,
@@ -27,6 +28,7 @@ interface ClubEvent {
   members: string[]
   isOwner: boolean
   ownerEmail?: string
+  publicOnCalendar: boolean
 }
 
 interface Task {
@@ -83,6 +85,7 @@ function docToEvent(d: EventDoc): ClubEvent {
     members: d.members ?? [],
     isOwner: d.isOwner ?? true,
     ownerEmail: d.ownerEmail,
+    publicOnCalendar: d.publicOnCalendar ?? false,
   }
 }
 
@@ -112,7 +115,8 @@ function docToMeeting(d: MeetingDoc): Meeting {
   return { id: d.id, eventId: d.eventId, dateTime: d.dateTime, location: d.location, agenda: d.agenda ?? '' }
 }
 
-function App() {
+export function PlannerApp() {
+  const navigate = useNavigate()
   const [user, setUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('dashboard')
@@ -162,6 +166,7 @@ function App() {
     setToken(null)
     setUser(null)
     setState(emptyState)
+    navigate('/', { replace: true })
   }
 
   const upcomingEvents = useMemo(
@@ -220,6 +225,25 @@ function App() {
       }
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Failed to save event')
+    }
+  }
+
+  async function deleteEvent(id: string) {
+    setApiError(null)
+    try {
+      await activitiesApi.deleteEvent(id)
+      setState((prev) => ({
+        ...prev,
+        events: prev.events.filter((e) => e.id !== id),
+        tasks: prev.tasks.filter((t) => t.eventId !== id),
+        budgetItems: prev.budgetItems.filter((b) => b.eventId !== id),
+        meetings: prev.meetings.map((m) =>
+          m.eventId === id ? { ...m, eventId: undefined } : m,
+        ),
+      }))
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : 'Failed to delete event')
+      throw err
     }
   }
 
@@ -303,7 +327,7 @@ function App() {
   }
 
   if (!user) {
-    return <AuthScreen onAuth={setUser} />
+    return <Navigate to="/login" replace />
   }
 
   return (
@@ -369,6 +393,8 @@ function App() {
       <main className="content">
         {tab === 'dashboard' && (
           <DashboardView
+            events={state.events}
+            tasks={state.tasks}
             upcomingEvents={upcomingEvents}
             openTasks={openTasks}
             overdueTasks={overdueTasks}
@@ -377,7 +403,7 @@ function App() {
           />
         )}
         {tab === 'events' && (
-          <EventsView events={state.events} onUpsert={upsertEvent} />
+          <EventsView events={state.events} onUpsert={upsertEvent} onDelete={deleteEvent} />
         )}
         {tab === 'tasks' && (
           <TasksView
@@ -416,6 +442,8 @@ function App() {
 }
 
 interface DashboardProps {
+  events: ClubEvent[]
+  tasks: Task[]
   upcomingEvents: ClubEvent[]
   openTasks: Task[]
   overdueTasks: Task[]
@@ -424,6 +452,8 @@ interface DashboardProps {
 }
 
 function DashboardView({
+  events,
+  tasks,
   upcomingEvents,
   openTasks,
   overdueTasks,
@@ -432,6 +462,7 @@ function DashboardView({
 }: DashboardProps) {
   return (
     <div className="panel-grid">
+      <DashboardCalendar events={events} tasks={tasks} />
       <section className="panel">
         <header className="panel-header">
           <h2>Upcoming events</h2>
@@ -537,11 +568,12 @@ function DashboardView({
 interface EventsViewProps {
   events: ClubEvent[]
   onUpsert: (partial: Omit<ClubEvent, 'id'>, id?: string) => Promise<void>
+  onDelete: (id: string) => Promise<void>
 }
 
 type EventFilter = 'all' | 'mine' | 'shared'
 
-function EventsView({ events, onUpsert }: EventsViewProps) {
+function EventsView({ events, onUpsert, onDelete }: EventsViewProps) {
   const [editingId, setEditingId] = useState<string | undefined>()
   const [members, setMembers] = useState<string[]>([])
   const [newMemberEmail, setNewMemberEmail] = useState('')
@@ -604,11 +636,27 @@ function EventsView({ events, onUpsert }: EventsViewProps) {
       budgetAllocated: Number(data.get('budgetAllocated') || 0),
       members,
       isOwner: true,
+      publicOnCalendar: data.get('publicOnCalendar') === 'on',
     }
     onUpsert(payload, editing?.id)
     form.reset()
     setEditingId(undefined)
     setMembers([])
+  }
+
+  async function handleDeleteEvent() {
+    if (!editing?.id) return
+    const ok = window.confirm(
+      'Delete this event permanently? Tasks and budget items linked to it will be removed. Meetings stay but will no longer be linked to this event.',
+    )
+    if (!ok) return
+    try {
+      await onDelete(editing.id)
+      setEditingId(undefined)
+      setMembers([])
+    } catch {
+      /* apiError set in parent */
+    }
   }
 
   return (
@@ -686,6 +734,10 @@ function EventsView({ events, onUpsert }: EventsViewProps) {
                 <span>{editing.status}</span>
               </div>
               <div className="readonly-row">
+                <span className="readonly-label">Public calendar</span>
+                <span>{editing.publicOnCalendar ? 'Listed publicly' : 'Not listed'}</span>
+              </div>
+              <div className="readonly-row">
                 <span className="readonly-label">Budget</span>
                 <span>${editing.budgetAllocated.toLocaleString()}</span>
               </div>
@@ -700,7 +752,11 @@ function EventsView({ events, onUpsert }: EventsViewProps) {
               </button>
             </div>
           ) : (
-          <form className="form" onSubmit={handleSubmit}>
+          <form
+            className="form"
+            onSubmit={handleSubmit}
+            key={editing?.id ?? 'new-event'}
+          >
             <label>
               <span>Event name</span>
               <input
@@ -754,6 +810,17 @@ function EventsView({ events, onUpsert }: EventsViewProps) {
                 defaultValue={editing?.budgetAllocated ?? 0}
               />
             </label>
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                name="publicOnCalendar"
+                defaultChecked={editing?.publicOnCalendar ?? false}
+              />
+              <span>
+                Show on public calendar (name, date and location only — for visitors on the home
+                page)
+              </span>
+            </label>
             <label>
               <span>Team members</span>
               <p className="form-hint">Add collaborators by email to involve them in this event.</p>
@@ -792,19 +859,32 @@ function EventsView({ events, onUpsert }: EventsViewProps) {
                 </ul>
               )}
             </label>
-            <div className="form-actions">
-              {editing && (
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={() => setEditingId(undefined)}
-                >
-                  Cancel
+            <div className="form-actions form-actions-spread">
+              <div className="form-actions-left">
+                {editing && (
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={() => void handleDeleteEvent()}
+                  >
+                    Delete event
+                  </button>
+                )}
+              </div>
+              <div className="form-actions-right">
+                {editing && (
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => setEditingId(undefined)}
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button type="submit" className="btn primary">
+                  {editing ? 'Save changes' : 'Add event'}
                 </button>
-              )}
-              <button type="submit" className="btn primary">
-                {editing ? 'Save changes' : 'Add event'}
-              </button>
+              </div>
             </div>
           </form>
           )}
@@ -848,6 +928,11 @@ function EventsView({ events, onUpsert }: EventsViewProps) {
                     </div>
                     <div className="badge-column">
                       {!e.isOwner && <span className="badge shared">Shared</span>}
+                      {e.publicOnCalendar && (
+                        <span className="badge subtle" title="Shown on public home calendar">
+                          Public
+                        </span>
+                      )}
                       <span className={`badge ${e.priority}`}>{e.priority}</span>
                       <span className="badge subtle">{e.status}</span>
                       <span className="badge subtle">
@@ -1463,4 +1548,3 @@ function ProfileView({ user }: ProfileViewProps) {
   )
 }
 
-export default App
