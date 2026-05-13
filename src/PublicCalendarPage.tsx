@@ -49,7 +49,7 @@ export function PublicCalendarPage() {
     <div className="public-calendar-page">
       <header className="public-calendar-top">
         <div className="public-calendar-brand">
-          <img className="logo-slot logo-slot-lg" src={logoImage} alt="Monash Deep Neuron logo" />
+          <img className="logo-slot-public" src={logoImage} alt="Monash Deep Neuron logo" />
           <div>
             <div className="public-calendar-title-row">
               <span className="brand-mark">✦</span>

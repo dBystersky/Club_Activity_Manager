@@ -336,7 +336,11 @@ export function PlannerApp() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-brand">
-            <img className="logo-slot" src={logoImage} alt="Monash Deep Neuron logo" />
+            <img
+              className="logo-slot-sidebar"
+              src={logoImage}
+              alt="Monash Deep Neuron logo"
+            />
             <div className="sidebar-brand-text">
               <div className="sidebar-title-row">
                 <h1>Monash <br />Deep Neuron</h1>
