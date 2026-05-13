@@ -45,8 +45,16 @@ export function AuthScreen({ onAuth }: AuthScreenProps) {
   return (
     <div className="auth-screen">
       <div className="auth-card">
-        <h1>Robotics Club Planner</h1>
-        <p>Sign in or create an account to manage events and tasks.</p>
+        <div className="auth-card-brand">
+          <div className="logo-slot logo-slot-lg" title="Logo" aria-label="Logo" />
+          <div>
+            <div className="auth-card-brand-title">
+              <span className="brand-mark">✦</span>
+              <h1>Robotics Club Planner</h1>
+            </div>
+            <p>Sign in or create an account to manage events and tasks.</p>
+          </div>
+        </div>
 
         <div className="auth-tabs">
           <button

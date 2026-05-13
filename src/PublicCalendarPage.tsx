@@ -47,11 +47,17 @@ export function PublicCalendarPage() {
   return (
     <div className="public-calendar-page">
       <header className="public-calendar-top">
-        <div>
-          <h1 className="public-calendar-title">Robotics Club Planner</h1>
-          <p className="public-calendar-tagline">
-            Public calendar — competitions, demos and open sessions the club has chosen to list.
-          </p>
+        <div className="public-calendar-brand">
+          <div className="logo-slot logo-slot-lg" title="Logo" aria-label="Logo" />
+          <div>
+            <div className="public-calendar-title-row">
+              <span className="brand-mark">✦</span>
+              <h1 className="public-calendar-title">Robotics Club Planner</h1>
+            </div>
+            <p className="public-calendar-tagline">
+              Public calendar — competitions, demos and open sessions the club has chosen to list.
+            </p>
+          </div>
         </div>
         <Link to="/login" className="btn primary member-login-btn">
           Member login

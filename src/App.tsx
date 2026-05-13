@@ -12,6 +12,11 @@ import {
   type BudgetItemDoc,
   type MeetingDoc,
 } from './api'
+import {
+  analyzeEventConflicts,
+  analyzeTaskConflicts,
+  formatPlanningConfirmBody,
+} from './planningConflicts'
 
 type Priority = 'low' | 'medium' | 'high'
 
@@ -334,8 +339,18 @@ export function PlannerApp() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h1>Robotics Club Planner</h1>
-          <p>Complex activity management for university robotics clubs.</p>
+          <div className="sidebar-brand">
+            <div className="logo-slot" title="Logo" aria-label="Logo" />
+            <div className="sidebar-brand-text">
+              <div className="sidebar-title-row">
+                <span className="brand-mark">✦</span>
+                <h1>Monash <br />Deep Neuron</h1>
+              </div>
+            </div>
+          </div>
+          <p className="sidebar-tagline">
+            Activity planning for student teams — events, tasks, budget and logistics.
+          </p>
           <p className="sidebar-user">{user.email}</p>
         </div>
         <nav className="sidebar-nav">
@@ -403,7 +418,12 @@ export function PlannerApp() {
           />
         )}
         {tab === 'events' && (
-          <EventsView events={state.events} onUpsert={upsertEvent} onDelete={deleteEvent} />
+          <EventsView
+            events={state.events}
+            meetings={state.meetings}
+            onUpsert={upsertEvent}
+            onDelete={deleteEvent}
+          />
         )}
         {tab === 'tasks' && (
           <TasksView
@@ -567,13 +587,14 @@ function DashboardView({
 
 interface EventsViewProps {
   events: ClubEvent[]
+  meetings: Meeting[]
   onUpsert: (partial: Omit<ClubEvent, 'id'>, id?: string) => Promise<void>
   onDelete: (id: string) => Promise<void>
 }
 
 type EventFilter = 'all' | 'mine' | 'shared'
 
-function EventsView({ events, onUpsert, onDelete }: EventsViewProps) {
+function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
   const [editingId, setEditingId] = useState<string | undefined>()
   const [members, setMembers] = useState<string[]>([])
   const [newMemberEmail, setNewMemberEmail] = useState('')
@@ -623,7 +644,7 @@ function EventsView({ events, onUpsert, onDelete }: EventsViewProps) {
     })
   }
 
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = e.currentTarget
     const data = new FormData(form)
@@ -638,7 +659,19 @@ function EventsView({ events, onUpsert, onDelete }: EventsViewProps) {
       isOwner: true,
       publicOnCalendar: data.get('publicOnCalendar') === 'on',
     }
-    onUpsert(payload, editing?.id)
+    const planIssues = analyzeEventConflicts(payload, {
+      events,
+      meetings,
+      excludeEventId: editing?.id,
+    })
+    if (planIssues.length > 0) {
+      const summary = formatPlanningConfirmBody(
+        planIssues,
+        'Planning checks found the following:',
+      )
+      if (!window.confirm(`${summary}\n\nSave this event anyway?`)) return
+    }
+    await onUpsert(payload, editing?.id)
     form.reset()
     setEditingId(undefined)
     setMembers([])
@@ -959,7 +992,7 @@ interface TasksViewProps {
 }
 
 function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = e.currentTarget
     const data = new FormData(form)
@@ -970,7 +1003,15 @@ function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
       eventId: (data.get('eventId') as string) || '',
       priority: (data.get('priority') as Priority) || 'medium',
     }
-    onAddTask(payload)
+    const planIssues = analyzeTaskConflicts(payload, { tasks, events })
+    if (planIssues.length > 0) {
+      const summary = formatPlanningConfirmBody(
+        planIssues,
+        'Planning checks found the following:',
+      )
+      if (!window.confirm(`${summary}\n\nAdd this task anyway?`)) return
+    }
+    await onAddTask(payload)
     form.reset()
   }
 
