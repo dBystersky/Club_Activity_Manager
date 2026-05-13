@@ -1,6 +1,6 @@
 # Robotics Club Planner
 
-Activity management for university robotics clubs: events, tasks, budgeting, safety & logistics, meetings. Uses React + Vite (frontend) and Express + MongoDB (backend).
+Activity management for university robotics clubs: events, tasks, budgeting, and safety & logistics. Uses React + Vite (frontend) and Express + MongoDB (backend).
 
 ## Setup
 

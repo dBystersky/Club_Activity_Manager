@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { publicApi, type PublicEventDoc } from './api'
 import { DashboardCalendar } from './components/DashboardCalendar'
+import logoImage from './assets/mdn-2-01.webp'
 
 export function PublicCalendarPage() {
   const [events, setEvents] = useState<PublicEventDoc[]>([])
@@ -48,11 +49,11 @@ export function PublicCalendarPage() {
     <div className="public-calendar-page">
       <header className="public-calendar-top">
         <div className="public-calendar-brand">
-          <div className="logo-slot logo-slot-lg" title="Logo" aria-label="Logo" />
+          <img className="logo-slot logo-slot-lg" src={logoImage} alt="Monash Deep Neuron logo" />
           <div>
             <div className="public-calendar-title-row">
               <span className="brand-mark">✦</span>
-              <h1 className="public-calendar-title">Robotics Club Planner</h1>
+              <h1 className="public-calendar-title">Monash Deep Neuron</h1>
             </div>
             <p className="public-calendar-tagline">
               Public calendar — competitions, demos and open sessions the club has chosen to list.

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { authApi, setToken, type AuthUser } from './api'
+import logoImage from './assets/mdn-2-01.webp'
 
 interface AuthScreenProps {
   onAuth: (user: AuthUser) => void
@@ -46,11 +47,11 @@ export function AuthScreen({ onAuth }: AuthScreenProps) {
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-card-brand">
-          <div className="logo-slot logo-slot-lg" title="Logo" aria-label="Logo" />
+          <img className="logo-slot logo-slot-lg" src={logoImage} alt="Monash Deep Neuron logo" />
           <div>
             <div className="auth-card-brand-title">
               <span className="brand-mark">✦</span>
-              <h1>Robotics Club Planner</h1>
+              <h1>Monash Deep Neuron</h1>
             </div>
             <p>Sign in or create an account to manage events and tasks.</p>
           </div>

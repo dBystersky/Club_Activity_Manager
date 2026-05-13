@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { DashboardCalendar } from './components/DashboardCalendar'
+import { PlanningAlerts } from './components/PlanningAlerts'
+import { UsersAdminPanel } from './components/UsersAdminPanel'
 import {
   activitiesApi,
   authApi,
@@ -10,13 +12,23 @@ import {
   type EventDoc,
   type TaskDoc,
   type BudgetItemDoc,
-  type MeetingDoc,
 } from './api'
 import {
   analyzeEventConflicts,
   analyzeTaskConflicts,
-  formatPlanningConfirmBody,
+  type PlanningIssue,
 } from './planningConflicts'
+import {
+  canAddBudgetLineItems,
+  canCreateTasks,
+  canEditEventCollaborators,
+  canManageClubAccounts,
+  canUseEventsAndSafety,
+  canViewBudgetSection,
+  normalizeAccessLevel,
+  type AccessLevel,
+} from './permissions'
+import logoImage from './assets/mdn-2-01.webp'
 
 type Priority = 'low' | 'medium' | 'high'
 
@@ -54,28 +66,18 @@ interface BudgetItem {
   spent: boolean
 }
 
-interface Meeting {
-  id: string
-  eventId?: string
-  dateTime: string
-  location: string
-  agenda: string
-}
-
-type Tab = 'dashboard' | 'events' | 'tasks' | 'budget' | 'safety' | 'meetings' | 'profile'
+type Tab = 'dashboard' | 'events' | 'tasks' | 'budget' | 'safety' | 'users' | 'profile'
 
 interface PersistedState {
   events: ClubEvent[]
   tasks: Task[]
   budgetItems: BudgetItem[]
-  meetings: Meeting[]
 }
 
 const emptyState: PersistedState = {
   events: [],
   tasks: [],
   budgetItems: [],
-  meetings: [],
 }
 
 function docToEvent(d: EventDoc): ClubEvent {
@@ -116,10 +118,6 @@ function docToBudgetItem(d: BudgetItemDoc): BudgetItem {
   }
 }
 
-function docToMeeting(d: MeetingDoc): Meeting {
-  return { id: d.id, eventId: d.eventId, dateTime: d.dateTime, location: d.location, agenda: d.agenda ?? '' }
-}
-
 export function PlannerApp() {
   const navigate = useNavigate()
   const [user, setUser] = useState<AuthUser | null>(null)
@@ -145,17 +143,15 @@ export function PlannerApp() {
     if (!user) return
     setApiError(null)
     try {
-      const [events, tasks, budgetItems, meetings] = await Promise.all([
+      const [events, tasks, budgetItems] = await Promise.all([
         activitiesApi.getEvents(),
         activitiesApi.getTasks(),
         activitiesApi.getBudgetItems(),
-        activitiesApi.getMeetings(),
       ])
       setState({
         events: events.map(docToEvent),
         tasks: tasks.map(docToTask),
         budgetItems: budgetItems.map(docToBudgetItem),
-        meetings: meetings.map(docToMeeting),
       })
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Failed to load data')
@@ -166,6 +162,17 @@ export function PlannerApp() {
   useEffect(() => {
     if (user) loadData()
   }, [user, loadData])
+
+  useEffect(() => {
+    if (!user) return
+    const a = normalizeAccessLevel(user.accessLevel)
+    if (a === 'member' && (tab === 'events' || tab === 'budget' || tab === 'safety')) {
+      setTab('dashboard')
+    }
+    if (a !== 'admin' && tab === 'users') {
+      setTab('dashboard')
+    }
+  }, [user, tab])
 
   function handleLogout() {
     setToken(null)
@@ -242,9 +249,6 @@ export function PlannerApp() {
         events: prev.events.filter((e) => e.id !== id),
         tasks: prev.tasks.filter((t) => t.eventId !== id),
         budgetItems: prev.budgetItems.filter((b) => b.eventId !== id),
-        meetings: prev.meetings.map((m) =>
-          m.eventId === id ? { ...m, eventId: undefined } : m,
-        ),
       }))
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Failed to delete event')
@@ -308,19 +312,6 @@ export function PlannerApp() {
     }
   }
 
-  async function addMeeting(partial: Omit<Meeting, 'id'>) {
-    setApiError(null)
-    try {
-      const created = await activitiesApi.createMeeting(partial)
-      setState((prev) => ({
-        ...prev,
-        meetings: [...prev.meetings, docToMeeting(created)],
-      }))
-    } catch (err) {
-      setApiError(err instanceof Error ? err.message : 'Failed to add meeting')
-    }
-  }
-
   if (authLoading) {
     return (
       <div className="auth-screen">
@@ -335,15 +326,19 @@ export function PlannerApp() {
     return <Navigate to="/login" replace />
   }
 
+  const access = normalizeAccessLevel(user.accessLevel)
+
+  const accessLabel =
+    access === 'admin' ? 'Admin' : access === 'manager' ? 'Manager' : 'Member'
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-brand">
-            <div className="logo-slot" title="Logo" aria-label="Logo" />
+            <img className="logo-slot" src={logoImage} alt="Monash Deep Neuron logo" />
             <div className="sidebar-brand-text">
               <div className="sidebar-title-row">
-                <span className="brand-mark">✦</span>
                 <h1>Monash <br />Deep Neuron</h1>
               </div>
             </div>
@@ -351,7 +346,10 @@ export function PlannerApp() {
           <p className="sidebar-tagline">
             Activity planning for student teams — events, tasks, budget and logistics.
           </p>
-          <p className="sidebar-user">{user.email}</p>
+          <p className="sidebar-user">
+            {user.email}
+            <span className="sidebar-access-badge">{accessLabel}</span>
+          </p>
         </div>
         <nav className="sidebar-nav">
           <button
@@ -360,36 +358,44 @@ export function PlannerApp() {
           >
             Overview
           </button>
-          <button
-            className={tab === 'events' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setTab('events')}
-          >
-            Events & Competitions
-          </button>
+          {canUseEventsAndSafety(access) && (
+            <button
+              className={tab === 'events' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setTab('events')}
+            >
+              Events & Competitions
+            </button>
+          )}
           <button
             className={tab === 'tasks' ? 'nav-item active' : 'nav-item'}
             onClick={() => setTab('tasks')}
           >
             Tasks & Collaboration
           </button>
-          <button
-            className={tab === 'budget' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setTab('budget')}
-          >
-            Budgeting
-          </button>
-          <button
-            className={tab === 'safety' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setTab('safety')}
-          >
-            Safety & Logistics
-          </button>
-          <button
-            className={tab === 'meetings' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setTab('meetings')}
-          >
-            Meetings & Reminders
-          </button>
+          {canViewBudgetSection(access) && (
+            <button
+              className={tab === 'budget' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setTab('budget')}
+            >
+              Budgeting
+            </button>
+          )}
+          {canUseEventsAndSafety(access) && (
+            <button
+              className={tab === 'safety' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setTab('safety')}
+            >
+              Safety & Logistics
+            </button>
+          )}
+          {canManageClubAccounts(access) && (
+            <button
+              className={tab === 'users' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setTab('users')}
+            >
+              Club accounts
+            </button>
+          )}
           <button
             className={tab === 'profile' ? 'nav-item active' : 'nav-item'}
             onClick={() => setTab('profile')}
@@ -415,14 +421,15 @@ export function PlannerApp() {
             overdueTasks={overdueTasks}
             totalAllocated={totalAllocated}
             totalPlannedSpend={totalPlannedSpend}
+            memberExperience={access === 'member'}
           />
         )}
-        {tab === 'events' && (
+        {tab === 'events' && canUseEventsAndSafety(access) && (
           <EventsView
             events={state.events}
-            meetings={state.meetings}
             onUpsert={upsertEvent}
             onDelete={deleteEvent}
+            canEditEventCollaborators={canEditEventCollaborators(access)}
           />
         )}
         {tab === 'tasks' && (
@@ -431,25 +438,29 @@ export function PlannerApp() {
             tasks={state.tasks}
             onAddTask={addTask}
             onToggleTask={toggleTaskCompletion}
+            canCreateTasks={canCreateTasks(access)}
+            userEmail={user.email}
           />
         )}
-        {tab === 'budget' && (
+        {tab === 'budget' && canViewBudgetSection(access) && (
           <BudgetView
             events={state.events}
             items={state.budgetItems}
             onAddItem={addBudgetItem}
             onToggleSpent={toggleBudgetItemSpent}
+            canAddBudgetLineItems={canAddBudgetLineItems(access)}
           />
         )}
-        {tab === 'safety' && <SafetyView events={state.events} tasks={state.tasks} />}
-        {tab === 'meetings' && (
-          <MeetingsView
-            events={state.events}
-            meetings={state.meetings}
-            onAddMeeting={addMeeting}
+        {tab === 'safety' && canUseEventsAndSafety(access) && (
+          <SafetyView events={state.events} tasks={state.tasks} />
+        )}
+        {tab === 'users' && canManageClubAccounts(access) && (
+          <UsersAdminPanel
+            currentUserId={user.id}
+            onCurrentUserUpdated={(u) => setUser(u)}
           />
         )}
-        {tab === 'profile' && <ProfileView user={user} />}
+        {tab === 'profile' && <ProfileView user={user} access={access} />}
       </main>
       {apiError && (
         <div className="api-error-banner">
@@ -469,6 +480,7 @@ interface DashboardProps {
   overdueTasks: Task[]
   totalAllocated: number
   totalPlannedSpend: number
+  memberExperience?: boolean
 }
 
 function DashboardView({
@@ -479,6 +491,7 @@ function DashboardView({
   overdueTasks,
   totalAllocated,
   totalPlannedSpend,
+  memberExperience = false,
 }: DashboardProps) {
   return (
     <div className="panel-grid">
@@ -490,7 +503,9 @@ function DashboardView({
         </header>
         {upcomingEvents.length === 0 ? (
           <p className="empty-state">
-            No events yet. Start by adding your next competition or demo.
+            {memberExperience
+              ? 'No upcoming events yet. When a lead adds you to an event, it will show here and on the calendar.'
+              : 'No events yet. Start by adding your next competition or demo.'}
           </p>
         ) : (
           <ul className="list">
@@ -524,8 +539,9 @@ function DashboardView({
         </header>
         {openTasks.length === 0 ? (
           <p className="empty-state">
-            No open tasks. Create build, logistics or sponsorship tasks to get
-            started.
+            {memberExperience
+              ? 'No open tasks assigned to you. Ask your lead to set the assignee field to your email when they create a task.'
+              : 'No open tasks. Create build, logistics or sponsorship tasks to get started.'}
           </p>
         ) : (
           <ul className="list">
@@ -545,6 +561,7 @@ function DashboardView({
         )}
       </section>
 
+      {!memberExperience && (
       <section className="panel span-2">
         <header className="panel-header">
           <h2>Budget snapshot</h2>
@@ -581,26 +598,73 @@ function DashboardView({
           </div>
         )}
       </section>
+      )}
+      {memberExperience && overdueTasks.length > 0 && (
+        <section className="panel span-2">
+          <div className="alert">
+            <strong>{overdueTasks.length} overdue task(s)</strong> – check due dates for work assigned to you.
+          </div>
+        </section>
+      )}
     </div>
   )
 }
 
 interface EventsViewProps {
   events: ClubEvent[]
-  meetings: Meeting[]
   onUpsert: (partial: Omit<ClubEvent, 'id'>, id?: string) => Promise<void>
   onDelete: (id: string) => Promise<void>
+  canEditEventCollaborators: boolean
 }
 
 type EventFilter = 'all' | 'mine' | 'shared'
 
-function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
+function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: EventsViewProps) {
   const [editingId, setEditingId] = useState<string | undefined>()
   const [members, setMembers] = useState<string[]>([])
   const [newMemberEmail, setNewMemberEmail] = useState('')
   const [memberStatus, setMemberStatus] = useState<Record<string, 'registered' | 'invited'>>({})
   const [eventFilter, setEventFilter] = useState<EventFilter>('all')
   const editing = events.find((e) => e.id === editingId)
+  const eventFormRef = useRef<HTMLFormElement>(null)
+  const [planIssues, setPlanIssues] = useState<PlanningIssue[]>([])
+
+  const buildEventPayloadFromForm = useCallback(
+    (data: FormData): Omit<ClubEvent, 'id'> => ({
+      name: (data.get('name') as string) || '',
+      date: (data.get('date') as string) || '',
+      location: (data.get('location') as string) || '',
+      priority: (data.get('priority') as Priority) || 'medium',
+      status: (data.get('status') as EventStatus) || 'planning',
+      budgetAllocated: Number(data.get('budgetAllocated') || 0),
+      members,
+      isOwner: true,
+      publicOnCalendar: data.get('publicOnCalendar') === 'on',
+    }),
+    [members],
+  )
+
+  const runEventPlanCheck = useCallback(() => {
+    const form = eventFormRef.current
+    if (!form) return
+    const data = new FormData(form)
+    const payload = buildEventPayloadFromForm(data)
+    setPlanIssues(
+      analyzeEventConflicts(payload, {
+        events,
+        excludeEventId: editing?.id,
+      }),
+    )
+  }, [buildEventPayloadFromForm, events, editing?.id])
+
+  useEffect(() => {
+    if (editing && !editing.isOwner) {
+      setPlanIssues([])
+      return
+    }
+    const id = requestAnimationFrame(() => runEventPlanCheck())
+    return () => cancelAnimationFrame(id)
+  }, [editing?.isOwner, editing?.id, editingId, events, members, runEventPlanCheck])
 
   const filteredEvents = useMemo(() => {
     if (eventFilter === 'mine') return events.filter((e) => e.isOwner)
@@ -617,6 +681,7 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
 
   const requestedEmails = useRef<Set<string>>(new Set())
   useEffect(() => {
+    if (!canEditEventCollaborators) return
     if (members.length === 0) return
     members.forEach((email) => {
       if (requestedEmails.current.has(email)) return
@@ -626,7 +691,7 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
         () => setMemberStatus((s) => ({ ...s, [email]: 'invited' }))
       )
     })
-  }, [members])
+  }, [members, canEditEventCollaborators])
 
   function addMember() {
     const email = newMemberEmail.trim().toLowerCase()
@@ -648,49 +713,37 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
     e.preventDefault()
     const form = e.currentTarget
     const data = new FormData(form)
-    const payload: Omit<ClubEvent, 'id'> = {
-      name: (data.get('name') as string) || '',
-      date: (data.get('date') as string) || '',
-      location: (data.get('location') as string) || '',
-      priority: (data.get('priority') as Priority) || 'medium',
-      status: (data.get('status') as EventStatus) || 'planning',
-      budgetAllocated: Number(data.get('budgetAllocated') || 0),
-      members,
-      isOwner: true,
-      publicOnCalendar: data.get('publicOnCalendar') === 'on',
-    }
-    const planIssues = analyzeEventConflicts(payload, {
+    const payload = buildEventPayloadFromForm(data)
+    const issues = analyzeEventConflicts(payload, {
       events,
-      meetings,
       excludeEventId: editing?.id,
     })
-    if (planIssues.length > 0) {
-      const summary = formatPlanningConfirmBody(
-        planIssues,
-        'Planning checks found the following:',
-      )
-      if (!window.confirm(`${summary}\n\nSave this event anyway?`)) return
-    }
+    setPlanIssues(issues)
+    if (issues.some((i) => i.severity === 'conflict')) return
     await onUpsert(payload, editing?.id)
     form.reset()
     setEditingId(undefined)
     setMembers([])
+    setPlanIssues([])
   }
 
   async function handleDeleteEvent() {
     if (!editing?.id) return
     const ok = window.confirm(
-      'Delete this event permanently? Tasks and budget items linked to it will be removed. Meetings stay but will no longer be linked to this event.',
+      'Delete this event permanently? Tasks and budget items linked to it will be removed.',
     )
     if (!ok) return
     try {
       await onDelete(editing.id)
       setEditingId(undefined)
       setMembers([])
+      setPlanIssues([])
     } catch {
       /* apiError set in parent */
     }
   }
+
+  const eventHasConflicts = planIssues.some((i) => i.severity === 'conflict')
 
   return (
     <div className="view">
@@ -786,10 +839,13 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
             </div>
           ) : (
           <form
+            ref={eventFormRef}
             className="form"
+            onChange={runEventPlanCheck}
             onSubmit={handleSubmit}
             key={editing?.id ?? 'new-event'}
           >
+            <PlanningAlerts issues={planIssues} />
             <label>
               <span>Event name</span>
               <input
@@ -854,6 +910,7 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
                 page)
               </span>
             </label>
+            {canEditEventCollaborators ? (
             <label>
               <span>Team members</span>
               <p className="form-hint">Add collaborators by email to involve them in this event.</p>
@@ -892,6 +949,26 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
                 </ul>
               )}
             </label>
+            ) : (
+            <div className="form-static-block">
+              <span className="form-static-label">Team members</span>
+              <p className="form-hint">
+                Only club admins can add or remove collaborators. Contact an admin if someone else
+                should be on this event.
+              </p>
+              {members.length > 0 ? (
+                <ul className="members-list members-list-readonly">
+                  {members.map((email) => (
+                    <li key={email} className="member-chip">
+                      <span>{email}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="form-hint">No collaborators listed for this event.</p>
+              )}
+            </div>
+            )}
             <div className="form-actions form-actions-spread">
               <div className="form-actions-left">
                 {editing && (
@@ -914,7 +991,7 @@ function EventsView({ events, meetings, onUpsert, onDelete }: EventsViewProps) {
                     Cancel
                   </button>
                 )}
-                <button type="submit" className="btn primary">
+                <button type="submit" className="btn primary" disabled={eventHasConflicts}>
                   {editing ? 'Save changes' : 'Add event'}
                 </button>
               </div>
@@ -989,9 +1066,40 @@ interface TasksViewProps {
   tasks: Task[]
   onAddTask: (task: Omit<Task, 'id' | 'completed'>) => Promise<void>
   onToggleTask: (id: string) => Promise<void>
+  canCreateTasks: boolean
+  userEmail: string
 }
 
-function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
+function TasksView({
+  events,
+  tasks,
+  onAddTask,
+  onToggleTask,
+  canCreateTasks,
+  userEmail,
+}: TasksViewProps) {
+  const taskFormRef = useRef<HTMLFormElement>(null)
+  const [taskPlanIssues, setTaskPlanIssues] = useState<PlanningIssue[]>([])
+
+  const runTaskPlanCheck = useCallback(() => {
+    const form = taskFormRef.current
+    if (!form) return
+    const data = new FormData(form)
+    const payload: Omit<Task, 'id' | 'completed'> = {
+      title: (data.get('title') as string) || '',
+      assignee: (data.get('assignee') as string) || '',
+      dueDate: (data.get('dueDate') as string) || '',
+      eventId: (data.get('eventId') as string) || '',
+      priority: (data.get('priority') as Priority) || 'medium',
+    }
+    setTaskPlanIssues(analyzeTaskConflicts(payload, { tasks, events }))
+  }, [tasks, events])
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => runTaskPlanCheck())
+    return () => cancelAnimationFrame(id)
+  }, [tasks, events, runTaskPlanCheck])
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = e.currentTarget
@@ -1003,17 +1111,15 @@ function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
       eventId: (data.get('eventId') as string) || '',
       priority: (data.get('priority') as Priority) || 'medium',
     }
-    const planIssues = analyzeTaskConflicts(payload, { tasks, events })
-    if (planIssues.length > 0) {
-      const summary = formatPlanningConfirmBody(
-        planIssues,
-        'Planning checks found the following:',
-      )
-      if (!window.confirm(`${summary}\n\nAdd this task anyway?`)) return
-    }
+    const issues = analyzeTaskConflicts(payload, { tasks, events })
+    setTaskPlanIssues(issues)
+    if (issues.some((i) => i.severity === 'conflict')) return
     await onAddTask(payload)
     form.reset()
+    requestAnimationFrame(() => runTaskPlanCheck())
   }
+
+  const taskHasConflicts = taskPlanIssues.some((i) => i.severity === 'conflict')
 
   const sorted = tasks
     .slice()
@@ -1032,12 +1138,19 @@ function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
       </header>
 
       <div className="view-grid">
+        {canCreateTasks && (
         <section className="panel">
           <header className="panel-header">
             <h3>New task</h3>
             <p>Attach tasks to events to keep context clear.</p>
           </header>
-          <form className="form" onSubmit={handleSubmit}>
+          <form
+            ref={taskFormRef}
+            className="form"
+            onChange={runTaskPlanCheck}
+            onSubmit={handleSubmit}
+          >
+            <PlanningAlerts issues={taskPlanIssues} />
             <label>
               <span>Task title</span>
               <input
@@ -1049,7 +1162,7 @@ function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
             <div className="form-row">
               <label>
                 <span>Assignee</span>
-                <input name="assignee" placeholder="Mechanical subteam" />
+                <input name="assignee" placeholder="teammate@student.monash.edu" />
               </label>
               <label>
                 <span>Due date</span>
@@ -1077,18 +1190,27 @@ function TasksView({ events, tasks, onAddTask, onToggleTask }: TasksViewProps) {
                 </select>
               </label>
             </div>
+            <p className="form-hint">
+              Use a teammate&apos;s account email as assignee so members can see the task and mark it
+              complete.
+            </p>
             <div className="form-actions">
-              <button type="submit" className="btn primary">
+              <button type="submit" className="btn primary" disabled={taskHasConflicts}>
                 Add task
               </button>
             </div>
           </form>
         </section>
+        )}
 
         <section className="panel">
           <header className="panel-header">
             <h3>Task board</h3>
-            <p>Click to mark work complete as the build progresses.</p>
+            <p>
+              {canCreateTasks
+                ? 'Click to mark work complete as the build progresses.'
+                : `Tasks where the assignee is your email (${userEmail}) appear here.`}
+            </p>
           </header>
           {sorted.length === 0 ? (
             <p className="empty-state">
@@ -1134,9 +1256,10 @@ interface BudgetViewProps {
   items: BudgetItem[]
   onAddItem: (item: Omit<BudgetItem, 'id' | 'spent'>) => Promise<void>
   onToggleSpent: (id: string) => Promise<void>
+  canAddBudgetLineItems: boolean
 }
 
-function BudgetView({ events, items, onAddItem, onToggleSpent }: BudgetViewProps) {
+function BudgetView({ events, items, onAddItem, onToggleSpent, canAddBudgetLineItems }: BudgetViewProps) {
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = e.currentTarget
@@ -1171,6 +1294,7 @@ function BudgetView({ events, items, onAddItem, onToggleSpent }: BudgetViewProps
       </header>
 
       <div className="view-grid">
+        {canAddBudgetLineItems ? (
         <section className="panel">
           <header className="panel-header">
             <h3>New budget item</h3>
@@ -1215,6 +1339,17 @@ function BudgetView({ events, items, onAddItem, onToggleSpent }: BudgetViewProps
             </div>
           </form>
         </section>
+        ) : (
+        <section className="panel">
+          <header className="panel-header">
+            <h3>New budget item</h3>
+            <p>Adding line items is limited to club admins.</p>
+          </header>
+          <p className="form-hint">
+            You can still review planned spend below and mark items as spent once invoices are paid.
+          </p>
+        </section>
+        )}
 
         <section className="panel">
           <header className="panel-header">
@@ -1387,133 +1522,12 @@ function SafetyView({ events, tasks }: SafetyViewProps) {
   )
 }
 
-interface MeetingsViewProps {
-  events: ClubEvent[]
-  meetings: Meeting[]
-  onAddMeeting: (meeting: Omit<Meeting, 'id'>) => Promise<void>
-}
-
-function MeetingsView({ events, meetings, onAddMeeting }: MeetingsViewProps) {
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const form = e.currentTarget
-    const data = new FormData(form)
-    const payload: Omit<Meeting, 'id'> = {
-      dateTime: (data.get('dateTime') as string) || '',
-      location: (data.get('location') as string) || '',
-      agenda: (data.get('agenda') as string) || '',
-      eventId: (data.get('eventId') as string) || undefined,
-    }
-    onAddMeeting(payload)
-    form.reset()
-  }
-
-  const sorted = meetings
-    .slice()
-    .sort((a, b) => a.dateTime.localeCompare(b.dateTime))
-
-  return (
-    <div className="view">
-      <header className="view-header">
-        <div>
-          <h2>Meetings & reminders</h2>
-          <p>
-            Keep design reviews, sponsor check‑ins and handover meetings
-            organised.
-          </p>
-        </div>
-      </header>
-
-      <div className="view-grid">
-        <section className="panel">
-          <header className="panel-header">
-            <h3>Schedule meeting</h3>
-            <p>Link meetings to events to keep purpose clear.</p>
-          </header>
-          <form className="form" onSubmit={handleSubmit}>
-            <label>
-              <span>Date & time</span>
-              <input name="dateTime" type="datetime-local" required />
-            </label>
-            <label>
-              <span>Location / call link</span>
-              <input
-                name="location"
-                placeholder="ENG 2.15 or online meeting link"
-                required
-              />
-            </label>
-            <label>
-              <span>Agenda</span>
-              <textarea
-                name="agenda"
-                rows={3}
-                placeholder="Design review, sponsor update, outreach planning..."
-              />
-            </label>
-            <label>
-              <span>Related event (optional)</span>
-              <select name="eventId" defaultValue="">
-                <option value="">General club meeting</option>
-                {events.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="form-actions">
-              <button type="submit" className="btn primary">
-                Add meeting
-              </button>
-            </div>
-          </form>
-        </section>
-
-        <section className="panel">
-          <header className="panel-header">
-            <h3>Meeting timeline</h3>
-            <p>Use this as a lightweight schedule and reminder list.</p>
-          </header>
-          {sorted.length === 0 ? (
-            <p className="empty-state">
-              No meetings scheduled. Add design reviews, weekly stand‑ups and
-              sponsor catch‑ups here.
-            </p>
-          ) : (
-            <ul className="list">
-              {sorted.map((m) => {
-                const event = events.find((e) => e.id === m.eventId)
-                return (
-                  <li key={m.id} className="list-row">
-                    <div>
-                      <div className="list-title">
-                        {event ? `${event.name} – meeting` : 'Club meeting'}
-                      </div>
-                      <div className="list-meta">
-                        <span>{m.dateTime.replace('T', ' ')}</span>
-                        <span>{m.location}</span>
-                      </div>
-                      {m.agenda && (
-                        <div className="list-description">{m.agenda}</div>
-                      )}
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </section>
-      </div>
-    </div>
-  )
-}
-
 interface ProfileViewProps {
   user: AuthUser
+  access: AccessLevel
 }
 
-function ProfileView({ user }: ProfileViewProps) {
+function ProfileView({ user, access }: ProfileViewProps) {
   const [displayName, setDisplayName] = useState(user.profile?.displayName ?? '')
   const [clubRole, setClubRole] = useState(user.profile?.clubRole ?? '')
   const [bio, setBio] = useState(user.profile?.bio ?? '')
@@ -1545,7 +1559,15 @@ function ProfileView({ user }: ProfileViewProps) {
       <section className="panel">
         <header className="panel-header">
           <h3>Your profile</h3>
-          <p>Email: {user.email}</p>
+          <p>
+            Email: {user.email}
+            <br />
+            <span className="profile-access-note">
+              Account access:{' '}
+              {access === 'admin' ? 'Admin (full permissions)' : access === 'manager' ? 'Manager' : 'Member'}{' '}
+              — this is set by your club; it is not the same as the club role field below.
+            </span>
+          </p>
         </header>
         <form className="form" onSubmit={handleSubmit}>
           <label>

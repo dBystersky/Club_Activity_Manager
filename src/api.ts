@@ -56,6 +56,39 @@ export const authApi = {
       method: 'PATCH',
       body: JSON.stringify(profile),
     }),
+
+  /** Admin only */
+  listUsers: () => request<{ users: AuthUser[] }>('/auth/users'),
+
+  /** Admin only */
+  adminCreateUser: (body: {
+    email: string
+    password: string
+    accessLevel?: 'member' | 'manager' | 'admin'
+    displayName?: string
+    clubRole?: string
+    bio?: string
+  }) =>
+    request<{ user: AuthUser }>('/auth/users', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** Admin only */
+  adminUpdateUser: (
+    id: string,
+    body: {
+      displayName?: string
+      clubRole?: string
+      bio?: string
+      accessLevel?: 'member' | 'manager' | 'admin'
+      password?: string
+    },
+  ) =>
+    request<{ user: AuthUser }>(`/auth/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 }
 
 export interface PublicEventDoc {
@@ -96,15 +129,12 @@ export const activitiesApi = {
     request<BudgetItemDoc>('/budget', { method: 'POST', body: JSON.stringify(body) }),
   updateBudgetItem: (id: string, body: Partial<BudgetItemDoc>) =>
     request<BudgetItemDoc>(`/budget/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-
-  getMeetings: () => request<Array<MeetingDoc>>('/meetings'),
-  createMeeting: (body: Omit<MeetingDoc, 'id'>) =>
-    request<MeetingDoc>('/meetings', { method: 'POST', body: JSON.stringify(body) }),
 }
 
 export interface AuthUser {
   id: string
   email: string
+  accessLevel?: 'member' | 'manager' | 'admin'
   profile: { displayName?: string; clubRole?: string; bio?: string }
 }
 
@@ -138,12 +168,4 @@ export interface BudgetItemDoc {
   label: string
   amount: number
   spent: boolean
-}
-
-export interface MeetingDoc {
-  id: string
-  eventId?: string
-  dateTime: string
-  location: string
-  agenda: string
 }

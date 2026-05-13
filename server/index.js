@@ -15,10 +15,16 @@ if (!existing) {
   await User.create({
     email: 'demo@club.local',
     password: 'demo123',
+    accessLevel: 'admin',
     profile: { displayName: 'Demo User', clubRole: 'Member', bio: 'Pre-created demo account' },
   })
   console.log('Created demo user: demo@club.local / demo123')
 }
+
+await User.updateOne(
+  { email: 'demo@club.local' },
+  { $set: { accessLevel: 'admin' } },
+)
 
 const app = express()
 app.use(cors({ origin: true, credentials: true }))

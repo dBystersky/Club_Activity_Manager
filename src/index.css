@@ -135,14 +135,9 @@ body {
   padding: 20px 18px 18px 18px;
   border-right: 1px solid var(--border-strong);
   border-left: none;
-  background: linear-gradient(
-    165deg,
-    hsla(0, 0%, 100%, 0.88) 0%,
-    hsla(250, 48%, 97%, 0.82) 50%,
-    hsla(248, 42%, 95%, 0.78) 100%
-  );
-  backdrop-filter: saturate(160%) blur(14px);
-  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -168,18 +163,14 @@ body {
 
 .logo-slot {
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  border: 1px dashed hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.35);
-  background: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.06);
-  box-sizing: border-box;
+  display:65px;
+  height: 65px;
+  object-fit: contain;
 }
 
 .logo-slot-lg {
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
+  width: 70x;
+  height: 70px;
 }
 
 .brand-mark {
@@ -287,26 +278,21 @@ body {
   padding: 22px 28px 24px;
   min-height: 100vh;
   box-sizing: border-box;
-  background: linear-gradient(
-    195deg,
-    hsla(0, 0%, 100%, 0.92) 0%,
-    hsla(252, 45%, 98%, 0.86) 45%,
-    hsla(246, 40%, 96%, 0.82) 100%
-  );
-  backdrop-filter: saturate(160%) blur(12px);
-  -webkit-backdrop-filter: saturate(160%) blur(12px);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   overflow: auto;
 }
 
 @supports not ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
   .sidebar {
-    background: linear-gradient(165deg, hsl(248, 44%, 97%) 0%, hsl(246, 38%, 94%) 100%);
+    background: transparent;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .content {
-    background: linear-gradient(180deg, hsl(252, 46%, 98%) 0%, hsl(246, 36%, 95%) 100%);
+    background: transparent;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -391,6 +377,10 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.view-grid .panel.span-2 {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 900px) {
@@ -634,6 +624,13 @@ label.form-checkbox {
   box-shadow: 0 6px 18px hsla(var(--accent-h), var(--accent-s), 48%, 0.28);
 }
 
+.btn.primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .btn.ghost {
   background: transparent;
   border-color: var(--border-strong);
@@ -824,6 +821,56 @@ label.form-checkbox {
   border: 1px solid rgba(234, 179, 8, 0.8);
   background: rgba(251, 191, 36, 0.1);
   font-size: 0.82rem;
+}
+
+.planning-alerts {
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.planning-block {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.planning-block-title {
+  font-weight: 600;
+  font-size: 0.84rem;
+  margin-bottom: 6px;
+}
+
+.planning-block-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.planning-block-list li {
+  margin: 3px 0;
+}
+
+.planning-block-hint {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  opacity: 0.92;
+}
+
+.planning-block--error {
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--text);
+}
+
+.planning-block--error .planning-block-title {
+  color: #b91c1c;
+}
+
+.planning-block--warning {
+  border: 1px solid rgba(234, 179, 8, 0.75);
+  background: rgba(251, 191, 36, 0.08);
 }
 
 .stacked {
@@ -1303,6 +1350,43 @@ label.form-checkbox {
   font-size: 0.8rem;
   color: var(--muted);
   margin-top: 4px !important;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-access-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.28);
+  color: #1f1a55;
+  border: 1px solid rgba(55, 48, 163, 0.55);
+}
+.form-static-block {
+  margin-top: 8px;
+}
+.form-static-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.members-list-readonly .member-chip {
+  padding-right: 10px;
+}
+.profile-access-note {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.45;
 }
 .sidebar-footnote .logout-btn {
   margin-top: 8px;

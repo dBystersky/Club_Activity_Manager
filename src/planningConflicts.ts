@@ -15,18 +15,6 @@ export interface PlanningIssue {
   message: string
 }
 
-function calendarDayFromMeetingDateTime(dateTime: string): string {
-  if (!dateTime) return ''
-  const m = dateTime.match(/^(\d{4}-\d{2}-\d{2})/)
-  if (m) return m[1]
-  const d = new Date(dateTime)
-  if (Number.isNaN(d.getTime())) return ''
-  const y = d.getFullYear()
-  const mo = String(d.getMonth() + 1).padStart(2, '0')
-  const da = String(d.getDate()).padStart(2, '0')
-  return `${y}-${mo}-${da}`
-}
-
 function isPlanningRelevantEvent(status: string): boolean {
   return status !== 'completed'
 }
@@ -47,14 +35,9 @@ export type EventLike = {
   status: string
 }
 
-export type MeetingLike = {
-  dateTime: string
-  location: string
-}
-
 /**
  * Detect venue double-booking (same calendar day + same location string),
- * same-day schedule density, meetings at the same venue, and member overlap across events.
+ * same-day schedule density, and member overlap across events.
  */
 export function analyzeEventConflicts(
   candidate: {
@@ -65,7 +48,6 @@ export function analyzeEventConflicts(
   },
   opts: {
     events: EventLike[]
-    meetings: MeetingLike[]
     excludeEventId?: string
   },
 ): PlanningIssue[] {
@@ -103,22 +85,6 @@ export function analyzeEventConflicts(
     }
   }
 
-  if (locNorm) {
-    for (const m of opts.meetings) {
-      if (calendarDayFromMeetingDateTime(m.dateTime) !== date) continue
-      if (normalizeVenue(m.location) === locNorm) {
-        dedupePush(
-          issues,
-          seen,
-          {
-            severity: 'conflict',
-            message: `Venue clash: a meeting is already booked at this location on ${date}.`,
-          },
-        )
-      }
-    }
-  }
-
   const candidateMembers = candidate.members
     .map((x) => x.trim().toLowerCase())
     .filter(Boolean)
@@ -132,8 +98,8 @@ export function analyzeEventConflicts(
         issues,
         seen,
         {
-          severity: 'warning',
-          message: `Team overlap: ${email} is also listed on "${e.name}" the same day.`,
+          severity: 'conflict',
+          message: `Resource clash: member ${email} is already listed on "${e.name}" the same day.`,
         },
       )
     }
@@ -188,8 +154,8 @@ export function analyzeTaskConflicts(
         issues,
         seen,
         {
-          severity: 'warning',
-          message: `Assignee load: ${count} other open task(s) due ${due} for the same assignee${titles.length ? ` (e.g. ${titles.join('; ')})` : ''}.`,
+          severity: 'conflict',
+          message: `Resource clash: this assignee already has ${count} open task(s) due on ${due}${titles.length ? ` (e.g. ${titles.join('; ')})` : ''}.`,
         },
       )
     }
@@ -212,13 +178,3 @@ export function analyzeTaskConflicts(
   return issues
 }
 
-export function formatPlanningConfirmBody(
-  issues: PlanningIssue[],
-  title: string,
-): string {
-  const lines = issues.map((i) => {
-    const tag = i.severity === 'conflict' ? 'Conflict' : 'Heads-up'
-    return `• [${tag}] ${i.message}`
-  })
-  return `${title}\n\n${lines.join('\n')}`
-}

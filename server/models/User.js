@@ -21,6 +21,11 @@ const userSchema = new mongoose.Schema(
       clubRole: { type: String, default: '' },
       bio: { type: String, default: '' },
     },
+    accessLevel: {
+      type: String,
+      enum: ['member', 'manager', 'admin'],
+      default: 'member',
+    },
   },
   { timestamps: true }
 )
