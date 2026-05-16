@@ -1,6 +1,6 @@
-# Robotics Club Planner
+# Deep learning club planner
 
-Activity management for university robotics clubs: events, tasks, budgeting, and safety & logistics. Uses React + Vite (frontend) and Express + MongoDB (backend).
+Activity management for university deep learning and AI research clubs: events, tasks, budgeting, and safety & logistics. Uses React + Vite (frontend) and Express + MongoDB (backend).
 
 ## Setup
 
@@ -21,7 +21,11 @@ Activity management for university robotics clubs: events, tasks, budgeting, and
    ```
    App runs at http://localhost:5173 (proxies `/api` to the backend)
 
-4. **Use the app** – Log in with the demo user **demo@club.local** / **demo123** (created on first server start), or register a new account. Data is stored in MongoDB.
+4. **Use the app** – Seed accounts (created when the server starts; password for all is **demo123**):
+   - **demo@club.local** — admin (full permissions)
+   - **member@club.local** — member
+   - **manager@club.local** — manager  
+   You can also register a new account (defaults to member). Data is stored in MongoDB.
 
 ---
 

@@ -28,3 +28,7 @@ export function canCreateTasks(level: AccessLevel) {
 export function canManageClubAccounts(level: AccessLevel) {
   return level === 'admin'
 }
+
+export function canManageInventory(level: AccessLevel) {
+  return level === 'admin'
+}

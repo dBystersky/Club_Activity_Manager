@@ -3,6 +3,12 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { DashboardCalendar } from './components/DashboardCalendar'
 import { PlanningAlerts } from './components/PlanningAlerts'
 import { UsersAdminPanel } from './components/UsersAdminPanel'
+import { InventoryPanel } from './components/InventoryPanel'
+import {
+  ResourceAssignPicker,
+  lockedResourcesForOtherEvents,
+  lockedResourcesForTaskContext,
+} from './components/ResourceAssignPicker'
 import {
   activitiesApi,
   authApi,
@@ -12,6 +18,7 @@ import {
   type EventDoc,
   type TaskDoc,
   type BudgetItemDoc,
+  type ResourceDoc,
 } from './api'
 import {
   analyzeEventConflicts,
@@ -23,6 +30,7 @@ import {
   canCreateTasks,
   canEditEventCollaborators,
   canManageClubAccounts,
+  canManageInventory,
   canUseEventsAndSafety,
   canViewBudgetSection,
   normalizeAccessLevel,
@@ -43,6 +51,7 @@ interface ClubEvent {
   status: EventStatus
   budgetAllocated: number
   members: string[]
+  resourceIds: string[]
   isOwner: boolean
   ownerEmail?: string
   publicOnCalendar: boolean
@@ -56,6 +65,7 @@ interface Task {
   dueDate: string
   priority: Priority
   completed: boolean
+  resourceIds: string[]
 }
 
 interface BudgetItem {
@@ -66,7 +76,15 @@ interface BudgetItem {
   spent: boolean
 }
 
-type Tab = 'dashboard' | 'events' | 'tasks' | 'budget' | 'safety' | 'users' | 'profile'
+type Tab =
+  | 'dashboard'
+  | 'events'
+  | 'tasks'
+  | 'budget'
+  | 'safety'
+  | 'users'
+  | 'inventory'
+  | 'profile'
 
 interface PersistedState {
   events: ClubEvent[]
@@ -90,6 +108,7 @@ function docToEvent(d: EventDoc): ClubEvent {
     status: (d.status as EventStatus) ?? 'planning',
     budgetAllocated: d.budgetAllocated ?? 0,
     members: d.members ?? [],
+    resourceIds: d.resourceIds ?? [],
     isOwner: d.isOwner ?? true,
     ownerEmail: d.ownerEmail,
     publicOnCalendar: d.publicOnCalendar ?? false,
@@ -105,7 +124,17 @@ function docToTask(d: TaskDoc): Task {
     dueDate: d.dueDate ?? '',
     priority: (d.priority as Priority) ?? 'medium',
     completed: d.completed ?? false,
+    resourceIds: d.resourceIds ?? [],
   }
+}
+
+function formatAllocatedResources(
+  ids: string[] | undefined,
+  catalog: ResourceDoc[],
+): string {
+  if (!ids?.length) return '—'
+  const map = new Map(catalog.map((r) => [r.id, r.name]))
+  return ids.map((id) => map.get(id) ?? id).join(', ')
 }
 
 function docToBudgetItem(d: BudgetItemDoc): BudgetItem {
@@ -124,6 +153,7 @@ export function PlannerApp() {
   const [authLoading, setAuthLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('dashboard')
   const [state, setState] = useState<PersistedState>(emptyState)
+  const [resources, setResources] = useState<ResourceDoc[]>([])
   const [apiError, setApiError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -143,11 +173,13 @@ export function PlannerApp() {
     if (!user) return
     setApiError(null)
     try {
-      const [events, tasks, budgetItems] = await Promise.all([
+      const [events, tasks, budgetItems, resourceList] = await Promise.all([
         activitiesApi.getEvents(),
         activitiesApi.getTasks(),
         activitiesApi.getBudgetItems(),
+        activitiesApi.getResources(),
       ])
+      setResources(resourceList)
       setState({
         events: events.map(docToEvent),
         tasks: tasks.map(docToTask),
@@ -156,6 +188,7 @@ export function PlannerApp() {
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Failed to load data')
       setState(emptyState)
+      setResources([])
     }
   }, [user])
 
@@ -172,12 +205,16 @@ export function PlannerApp() {
     if (a !== 'admin' && tab === 'users') {
       setTab('dashboard')
     }
+    if (a !== 'admin' && tab === 'inventory') {
+      setTab('dashboard')
+    }
   }, [user, tab])
 
   function handleLogout() {
     setToken(null)
     setUser(null)
     setState(emptyState)
+    setResources([])
     navigate('/', { replace: true })
   }
 
@@ -219,24 +256,28 @@ export function PlannerApp() {
     )
   }, [state.tasks])
 
-  async function upsertEvent(partial: Omit<ClubEvent, 'id'>, id?: string) {
+  async function upsertEvent(partial: Omit<ClubEvent, 'id'>, id?: string): Promise<ClubEvent | undefined> {
     setApiError(null)
     try {
       if (id) {
         const updated = await activitiesApi.updateEvent(id, partial)
+        const ev = docToEvent(updated)
         setState((prev) => ({
           ...prev,
-          events: prev.events.map((e) => (e.id === id ? docToEvent(updated) : e)),
+          events: prev.events.map((e) => (e.id === id ? ev : e)),
         }))
-      } else {
-        const created = await activitiesApi.createEvent(partial)
-        setState((prev) => ({
-          ...prev,
-          events: [...prev.events, docToEvent(created)],
-        }))
+        return ev
       }
+      const created = await activitiesApi.createEvent(partial)
+      const ev = docToEvent(created)
+      setState((prev) => ({
+        ...prev,
+        events: [...prev.events, ev],
+      }))
+      return ev
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Failed to save event')
+      return undefined
     }
   }
 
@@ -275,6 +316,32 @@ export function PlannerApp() {
     setApiError(null)
     try {
       const updated = await activitiesApi.updateTask(id, { completed: !task.completed })
+      setState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.map((t) => (t.id === id ? docToTask(updated) : t)),
+      }))
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : 'Failed to update task')
+    }
+  }
+
+  async function deleteTask(id: string) {
+    setApiError(null)
+    try {
+      await activitiesApi.deleteTask(id)
+      setState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.filter((t) => t.id !== id),
+      }))
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : 'Failed to delete task')
+    }
+  }
+
+  async function updateTaskPatch(id: string, patch: Partial<Omit<TaskDoc, 'id'>>) {
+    setApiError(null)
+    try {
+      const updated = await activitiesApi.updateTask(id, patch)
       setState((prev) => ({
         ...prev,
         tasks: prev.tasks.map((t) => (t.id === id ? docToTask(updated) : t)),
@@ -348,7 +415,7 @@ export function PlannerApp() {
             </div>
           </div>
           <p className="sidebar-tagline">
-            Activity planning for student teams — events, tasks, budget and logistics.
+            Planning for deep learning and AI research groups — events, tasks, budget and logistics.
           </p>
           <p className="sidebar-user">
             {user.email}
@@ -367,7 +434,7 @@ export function PlannerApp() {
               className={tab === 'events' ? 'nav-item active' : 'nav-item'}
               onClick={() => setTab('events')}
             >
-              Events & Competitions
+              Events & milestones
             </button>
           )}
           <button
@@ -400,6 +467,14 @@ export function PlannerApp() {
               Club accounts
             </button>
           )}
+          {canManageInventory(access) && (
+            <button
+              className={tab === 'inventory' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setTab('inventory')}
+            >
+              Inventory
+            </button>
+          )}
           <button
             className={tab === 'profile' ? 'nav-item active' : 'nav-item'}
             onClick={() => setTab('profile')}
@@ -420,6 +495,7 @@ export function PlannerApp() {
           <DashboardView
             events={state.events}
             tasks={state.tasks}
+            resources={resources}
             upcomingEvents={upcomingEvents}
             openTasks={openTasks}
             overdueTasks={overdueTasks}
@@ -431,8 +507,16 @@ export function PlannerApp() {
         {tab === 'events' && canUseEventsAndSafety(access) && (
           <EventsView
             events={state.events}
+            tasks={state.tasks}
+            resources={resources}
+            userEmail={user.email}
             onUpsert={upsertEvent}
             onDelete={deleteEvent}
+            onAddTask={addTask}
+            onToggleTask={toggleTaskCompletion}
+            onDeleteTask={deleteTask}
+            onUpdateTask={updateTaskPatch}
+            canCreateTasks={canCreateTasks(access)}
             canEditEventCollaborators={canEditEventCollaborators(access)}
           />
         )}
@@ -440,8 +524,10 @@ export function PlannerApp() {
           <TasksView
             events={state.events}
             tasks={state.tasks}
+            resources={resources}
             onAddTask={addTask}
             onToggleTask={toggleTaskCompletion}
+            onUpdateTask={updateTaskPatch}
             canCreateTasks={canCreateTasks(access)}
             userEmail={user.email}
           />
@@ -464,6 +550,13 @@ export function PlannerApp() {
             onCurrentUserUpdated={(u) => setUser(u)}
           />
         )}
+        {tab === 'inventory' && canManageInventory(access) && (
+          <InventoryPanel
+            resources={resources}
+            onChanged={() => void loadData()}
+            onError={setApiError}
+          />
+        )}
         {tab === 'profile' && <ProfileView user={user} access={access} />}
       </main>
       {apiError && (
@@ -479,6 +572,7 @@ export function PlannerApp() {
 interface DashboardProps {
   events: ClubEvent[]
   tasks: Task[]
+  resources: ResourceDoc[]
   upcomingEvents: ClubEvent[]
   openTasks: Task[]
   overdueTasks: Task[]
@@ -490,6 +584,7 @@ interface DashboardProps {
 function DashboardView({
   events,
   tasks,
+  resources,
   upcomingEvents,
   openTasks,
   overdueTasks,
@@ -503,13 +598,13 @@ function DashboardView({
       <section className="panel">
         <header className="panel-header">
           <h2>Upcoming events</h2>
-          <p>Competitions, showcases and outreach sessions.</p>
+          <p>Workshops, reading groups and outreach sessions.</p>
         </header>
         {upcomingEvents.length === 0 ? (
           <p className="empty-state">
             {memberExperience
               ? 'No upcoming events yet. When a lead adds you to an event, it will show here and on the calendar.'
-              : 'No events yet. Start by adding your next competition or demo.'}
+              : 'No events yet. Start by adding your next workshop, milestone or deadline.'}
           </p>
         ) : (
           <ul className="list">
@@ -522,6 +617,11 @@ function DashboardView({
                     <span>{e.location || 'Location TBC'}</span>
                     {e.members?.length ? (
                       <span className="members-count">{e.members.length} member{e.members.length !== 1 ? 's' : ''}</span>
+                    ) : null}
+                    {e.resourceIds?.length ? (
+                      <span title={formatAllocatedResources(e.resourceIds, resources)}>
+                        Resources: {formatAllocatedResources(e.resourceIds, resources)}
+                      </span>
                     ) : null}
                   </div>
                 </div>
@@ -545,7 +645,7 @@ function DashboardView({
           <p className="empty-state">
             {memberExperience
               ? 'No open tasks assigned to you. Ask your lead to set the assignee field to your email when they create a task.'
-              : 'No open tasks. Create build, logistics or sponsorship tasks to get started.'}
+              : 'No open tasks. Add experiments, writing, compute logistics or sponsor outreach tasks to get started.'}
           </p>
         ) : (
           <ul className="list">
@@ -556,6 +656,11 @@ function DashboardView({
                   <div className="list-meta">
                     <span>{t.assignee || 'Unassigned'}</span>
                     <span>{t.dueDate || 'No deadline'}</span>
+                    {t.resourceIds?.length ? (
+                      <span title={formatAllocatedResources(t.resourceIds, resources)}>
+                        Resources: {formatAllocatedResources(t.resourceIds, resources)}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <span className={`badge ${t.priority}`}>{t.priority}</span>
@@ -616,14 +721,281 @@ function DashboardView({
 
 interface EventsViewProps {
   events: ClubEvent[]
-  onUpsert: (partial: Omit<ClubEvent, 'id'>, id?: string) => Promise<void>
+  tasks: Task[]
+  resources: ResourceDoc[]
+  userEmail: string
+  onUpsert: (partial: Omit<ClubEvent, 'id'>, id?: string) => Promise<ClubEvent | undefined>
   onDelete: (id: string) => Promise<void>
+  onAddTask: (partial: Omit<Task, 'id' | 'completed'>) => Promise<void>
+  onToggleTask: (id: string) => Promise<void>
+  onDeleteTask: (id: string) => Promise<void>
+  onUpdateTask: (id: string, patch: Partial<Omit<TaskDoc, 'id'>>) => Promise<void>
+  canCreateTasks: boolean
   canEditEventCollaborators: boolean
 }
 
 type EventFilter = 'all' | 'mine' | 'shared'
 
-function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: EventsViewProps) {
+interface EventSubtasksPanelProps {
+  eventId: string
+  tasks: Task[]
+  events: ClubEvent[]
+  resources: ResourceDoc[]
+  userEmail: string
+  canCreateTasks: boolean
+  onAddTask: (partial: Omit<Task, 'id' | 'completed'>) => Promise<void>
+  onToggleTask: (id: string) => Promise<void>
+  onDeleteTask: (id: string) => Promise<void>
+  onUpdateTask: (id: string, patch: Partial<Omit<TaskDoc, 'id'>>) => Promise<void>
+}
+
+function EventSubtasksPanel({
+  eventId,
+  tasks,
+  events,
+  resources,
+  userEmail,
+  canCreateTasks,
+  onAddTask,
+  onToggleTask,
+  onDeleteTask,
+  onUpdateTask,
+}: EventSubtasksPanelProps) {
+  const [subTitle, setSubTitle] = useState('')
+  const [subAssignee, setSubAssignee] = useState('')
+  const [subDue, setSubDue] = useState('')
+  const [subResourceIds, setSubResourceIds] = useState<string[]>([])
+  const [subIssues, setSubIssues] = useState<PlanningIssue[]>([])
+  const [resourcesEditorTaskId, setResourcesEditorTaskId] = useState<string | null>(null)
+  const [editorResourceIds, setEditorResourceIds] = useState<string[]>([])
+
+  const subtasks = useMemo(() => {
+    return tasks
+      .filter((t) => t.eventId === eventId)
+      .slice()
+      .sort((a, b) => {
+        const da = a.dueDate || ''
+        const db = b.dueDate || ''
+        if (da !== db) return da.localeCompare(db)
+        return a.title.localeCompare(b.title)
+      })
+  }, [tasks, eventId])
+
+  const me = userEmail.trim().toLowerCase()
+
+  function rowCanToggle(task: Task): boolean {
+    if (canCreateTasks) return true
+    const a = (task.assignee || '').trim().toLowerCase()
+    return Boolean(a && a === me)
+  }
+
+  function openSubtaskResourceEditor(taskId: string) {
+    const t = tasks.find((x) => x.id === taskId)
+    setResourcesEditorTaskId(taskId)
+    setEditorResourceIds(t?.resourceIds?.slice() ?? [])
+  }
+
+  async function handleAddSubtask(e: React.FormEvent) {
+    e.preventDefault()
+    const title = subTitle.trim()
+    if (!title) return
+    const payload: Omit<Task, 'id' | 'completed'> = {
+      title,
+      assignee: subAssignee.trim(),
+      dueDate: subDue,
+      eventId,
+      priority: 'medium',
+      resourceIds: subResourceIds.slice(),
+    }
+    const issues = analyzeTaskConflicts(payload, { tasks, events })
+    setSubIssues(issues)
+    if (issues.some((i) => i.severity === 'conflict')) return
+    await onAddTask(payload)
+    setSubTitle('')
+    setSubAssignee('')
+    setSubDue('')
+    setSubResourceIds([])
+    setSubIssues([])
+  }
+
+  async function handleRemoveSubtask(id: string) {
+    const ok = window.confirm('Remove this subtask from the event?')
+    if (!ok) return
+    await onDeleteTask(id)
+    if (resourcesEditorTaskId === id) {
+      setResourcesEditorTaskId(null)
+    }
+  }
+
+  async function saveSubtaskResources() {
+    if (!resourcesEditorTaskId) return
+    await onUpdateTask(resourcesEditorTaskId, { resourceIds: editorResourceIds.slice() })
+    setResourcesEditorTaskId(null)
+  }
+
+  const editingTaskTitle = resourcesEditorTaskId
+    ? subtasks.find((t) => t.id === resourcesEditorTaskId)?.title
+    : undefined
+
+  return (
+    <div className="event-subtasks-panel">
+      <div className="subpanel-header">
+        <div className="subpanel-title">Event subtasks</div>
+        <div className="subpanel-meta">
+          {canCreateTasks
+            ? 'Create assignments scoped to this milestone.'
+            : 'Click a row assigned to you to mark it complete.'}
+        </div>
+      </div>
+
+      {canCreateTasks && (
+        <form className="form" onSubmit={(e) => void handleAddSubtask(e)}>
+          <PlanningAlerts issues={subIssues} />
+          <label>
+            <span>Subtask title</span>
+            <input
+              value={subTitle}
+              onChange={(e) => setSubTitle(e.target.value)}
+              placeholder="e.g. Finish SLURM sweep for baseline"
+              required
+            />
+          </label>
+          <div className="form-row">
+            <label>
+              <span>Assignee</span>
+              <input
+                value={subAssignee}
+                onChange={(e) => setSubAssignee(e.target.value)}
+                placeholder="researcher@student.monash.edu"
+              />
+            </label>
+            <label>
+              <span>Due date</span>
+              <input value={subDue} onChange={(e) => setSubDue(e.target.value)} type="date" />
+            </label>
+          </div>
+          <ResourceAssignPicker
+            resources={resources}
+            value={subResourceIds}
+            onChange={setSubResourceIds}
+            lockedByOtherEvents={lockedResourcesForTaskContext(events, eventId)}
+            hint="Search to attach inventory for this subtask."
+          />
+          <div className="form-actions">
+            <button type="submit" className="btn primary">
+              Add subtask
+            </button>
+          </div>
+        </form>
+      )}
+
+      {subtasks.length === 0 ? (
+        <p className="empty-state">
+          {canCreateTasks
+            ? 'No subtasks yet. Break this milestone into concrete assignments above.'
+            : 'No subtasks for this event yet.'}
+        </p>
+      ) : (
+        <ul className="list compact">
+          {subtasks.map((t) => (
+            <li
+              key={t.id}
+              className={
+                rowCanToggle(t)
+                  ? t.completed
+                    ? 'list-row completed selectable'
+                    : 'list-row selectable'
+                  : 'list-row'
+              }
+            >
+              <div
+                className="subtask-row-main"
+                onClick={() => {
+                  if (rowCanToggle(t)) void onToggleTask(t.id)
+                }}
+                role={rowCanToggle(t) ? 'button' : undefined}
+              >
+                <div className="list-title">{t.title}</div>
+                <div className="list-meta">
+                  <span>{t.assignee || 'Unassigned'}</span>
+                  <span>{t.dueDate || 'No deadline'}</span>
+                  {t.resourceIds?.length ? (
+                    <span>{formatAllocatedResources(t.resourceIds, resources)}</span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="badge-row">
+                <span className={`badge ${t.priority}`}>{t.completed ? 'Done' : t.priority}</span>
+                {canCreateTasks ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => {
+                        if (resourcesEditorTaskId === t.id) {
+                          setResourcesEditorTaskId(null)
+                          return
+                        }
+                        openSubtaskResourceEditor(t.id)
+                      }}
+                    >
+                      {resourcesEditorTaskId === t.id ? 'Close' : 'Resources'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn danger"
+                      onClick={() => void handleRemoveSubtask(t.id)}
+                    >
+                      Remove
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canCreateTasks && resourcesEditorTaskId && (
+        <div className="task-resources-editor">
+          <p className="form-static-label">
+            Assign resources — {editingTaskTitle ?? 'Subtask'}
+          </p>
+          <ResourceAssignPicker
+            resources={resources}
+            value={editorResourceIds}
+            onChange={setEditorResourceIds}
+            lockedByOtherEvents={lockedResourcesForTaskContext(events, eventId)}
+            hint="Adjust allocations for this subtask."
+          />
+          <div className="form-actions">
+            <button type="button" className="btn ghost" onClick={() => setResourcesEditorTaskId(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn primary" onClick={() => void saveSubtaskResources()}>
+              Save resources
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EventsView({
+  events,
+  tasks,
+  resources,
+  userEmail,
+  onUpsert,
+  onDelete,
+  onAddTask,
+  onToggleTask,
+  onDeleteTask,
+  onUpdateTask,
+  canCreateTasks,
+  canEditEventCollaborators,
+}: EventsViewProps) {
   const [editingId, setEditingId] = useState<string | undefined>()
   const [members, setMembers] = useState<string[]>([])
   const [newMemberEmail, setNewMemberEmail] = useState('')
@@ -632,6 +1004,11 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
   const editing = events.find((e) => e.id === editingId)
   const eventFormRef = useRef<HTMLFormElement>(null)
   const [planIssues, setPlanIssues] = useState<PlanningIssue[]>([])
+  const [eventResourceDraft, setEventResourceDraft] = useState<string[]>([])
+
+  useEffect(() => {
+    setEventResourceDraft(editing?.resourceIds?.slice() ?? [])
+  }, [editing?.id])
 
   const buildEventPayloadFromForm = useCallback(
     (data: FormData): Omit<ClubEvent, 'id'> => ({
@@ -642,10 +1019,11 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
       status: (data.get('status') as EventStatus) || 'planning',
       budgetAllocated: Number(data.get('budgetAllocated') || 0),
       members,
+      resourceIds: eventResourceDraft.slice(),
       isOwner: true,
       publicOnCalendar: data.get('publicOnCalendar') === 'on',
     }),
-    [members],
+    [members, eventResourceDraft],
   )
 
   const runEventPlanCheck = useCallback(() => {
@@ -668,7 +1046,7 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
     }
     const id = requestAnimationFrame(() => runEventPlanCheck())
     return () => cancelAnimationFrame(id)
-  }, [editing?.isOwner, editing?.id, editingId, events, members, runEventPlanCheck])
+  }, [editing?.isOwner, editing?.id, editingId, events, members, eventResourceDraft, runEventPlanCheck])
 
   const filteredEvents = useMemo(() => {
     if (eventFilter === 'mine') return events.filter((e) => e.isOwner)
@@ -724,23 +1102,26 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
     })
     setPlanIssues(issues)
     if (issues.some((i) => i.severity === 'conflict')) return
-    await onUpsert(payload, editing?.id)
-    form.reset()
-    setEditingId(undefined)
-    setMembers([])
+    const saved = await onUpsert(payload, editing?.id)
+    if (saved) {
+      setEditingId(saved.id)
+      setMembers(saved.members ?? [])
+      setEventResourceDraft(saved.resourceIds ?? [])
+    }
     setPlanIssues([])
   }
 
   async function handleDeleteEvent() {
     if (!editing?.id) return
     const ok = window.confirm(
-      'Delete this event permanently? Tasks and budget items linked to it will be removed.',
+      'Delete this event permanently? Subtasks, budget items and other data linked to it will be removed.',
     )
     if (!ok) return
     try {
       await onDelete(editing.id)
       setEditingId(undefined)
       setMembers([])
+      setEventResourceDraft([])
       setPlanIssues([])
     } catch {
       /* apiError set in parent */
@@ -753,9 +1134,9 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
     <div className="view">
       <header className="view-header">
         <div>
-          <h2>Events & competitions</h2>
+          <h2>Events & milestones</h2>
           <p>
-            Plan competitions, demos, recruitment nights and outreach sessions
+            Plan journal clubs, experiments, recruitment nights and outreach sessions
             in one place.
           </p>
         </div>
@@ -837,11 +1218,28 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
                   <span>{editing.members.join(', ')}</span>
                 </div>
               ) : null}
+              <div className="readonly-row">
+                <span className="readonly-label">Resources</span>
+                <span>{formatAllocatedResources(editing.resourceIds, resources)}</span>
+              </div>
+              <EventSubtasksPanel
+                eventId={editing.id}
+                tasks={tasks}
+                events={events}
+                resources={resources}
+                userEmail={userEmail}
+                canCreateTasks={canCreateTasks}
+                onAddTask={onAddTask}
+                onToggleTask={onToggleTask}
+                onDeleteTask={onDeleteTask}
+                onUpdateTask={onUpdateTask}
+              />
               <button type="button" className="btn ghost" onClick={() => setEditingId(undefined)}>
                 Close
               </button>
             </div>
           ) : (
+          <>
           <form
             ref={eventFormRef}
             className="form"
@@ -855,7 +1253,7 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
               <input
                 name="name"
                 defaultValue={editing?.name}
-                placeholder="RoboCup regional qualifier"
+                placeholder="NeurIPS workshop dry run"
                 required
               />
             </label>
@@ -869,7 +1267,7 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
                 <input
                   name="location"
                   defaultValue={editing?.location}
-                  placeholder="Engineering building lab"
+                  placeholder="GPU lab / hybrid Zoom"
                 />
               </label>
             </div>
@@ -914,6 +1312,13 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
                 page)
               </span>
             </label>
+            <ResourceAssignPicker
+              resources={resources}
+              value={eventResourceDraft}
+              onChange={setEventResourceDraft}
+              lockedByOtherEvents={lockedResourcesForOtherEvents(events, editing?.id)}
+              hint="Search and assign inventory. Each item may belong to only one active event until that event is completed."
+            />
             {canEditEventCollaborators ? (
             <label>
               <span>Team members</span>
@@ -924,7 +1329,7 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
                   value={newMemberEmail}
                   onChange={(e) => setNewMemberEmail(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addMember())}
-                  placeholder="teammate@university.edu"
+                  placeholder="collaborator@university.edu"
                 />
                 <button type="button" className="btn primary" onClick={addMember}>
                   Add
@@ -1001,6 +1406,25 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
               </div>
             </div>
           </form>
+          {editing?.id ? (
+            <EventSubtasksPanel
+              eventId={editing.id}
+              tasks={tasks}
+              events={events}
+              resources={resources}
+              userEmail={userEmail}
+              canCreateTasks={canCreateTasks}
+              onAddTask={onAddTask}
+              onToggleTask={onToggleTask}
+              onDeleteTask={onDeleteTask}
+              onUpdateTask={onUpdateTask}
+            />
+          ) : (
+            <p className="form-hint event-subtasks-hint">
+              Save the event first to add subtasks assigned to this milestone.
+            </p>
+          )}
+          </>
           )}
         </section>
 
@@ -1068,8 +1492,10 @@ function EventsView({ events, onUpsert, onDelete, canEditEventCollaborators }: E
 interface TasksViewProps {
   events: ClubEvent[]
   tasks: Task[]
+  resources: ResourceDoc[]
   onAddTask: (task: Omit<Task, 'id' | 'completed'>) => Promise<void>
   onToggleTask: (id: string) => Promise<void>
+  onUpdateTask: (id: string, patch: Partial<Omit<TaskDoc, 'id'>>) => Promise<void>
   canCreateTasks: boolean
   userEmail: string
 }
@@ -1077,13 +1503,19 @@ interface TasksViewProps {
 function TasksView({
   events,
   tasks,
+  resources,
   onAddTask,
   onToggleTask,
+  onUpdateTask,
   canCreateTasks,
   userEmail,
 }: TasksViewProps) {
   const taskFormRef = useRef<HTMLFormElement>(null)
   const [taskPlanIssues, setTaskPlanIssues] = useState<PlanningIssue[]>([])
+  const [resourcesEditTaskId, setResourcesEditTaskId] = useState<string | null>(null)
+  const [draftResourceIds, setDraftResourceIds] = useState<string[]>([])
+  const [linkedEventDraft, setLinkedEventDraft] = useState('')
+  const [newTaskResources, setNewTaskResources] = useState<string[]>([])
 
   const runTaskPlanCheck = useCallback(() => {
     const form = taskFormRef.current
@@ -1093,16 +1525,17 @@ function TasksView({
       title: (data.get('title') as string) || '',
       assignee: (data.get('assignee') as string) || '',
       dueDate: (data.get('dueDate') as string) || '',
-      eventId: (data.get('eventId') as string) || '',
+      eventId: linkedEventDraft,
       priority: (data.get('priority') as Priority) || 'medium',
+      resourceIds: newTaskResources.slice(),
     }
     setTaskPlanIssues(analyzeTaskConflicts(payload, { tasks, events }))
-  }, [tasks, events])
+  }, [tasks, events, linkedEventDraft, newTaskResources])
 
   useEffect(() => {
     const id = requestAnimationFrame(() => runTaskPlanCheck())
     return () => cancelAnimationFrame(id)
-  }, [tasks, events, runTaskPlanCheck])
+  }, [tasks, events, runTaskPlanCheck, linkedEventDraft, newTaskResources])
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -1112,14 +1545,17 @@ function TasksView({
       title: (data.get('title') as string) || '',
       assignee: (data.get('assignee') as string) || '',
       dueDate: (data.get('dueDate') as string) || '',
-      eventId: (data.get('eventId') as string) || '',
+      eventId: linkedEventDraft,
       priority: (data.get('priority') as Priority) || 'medium',
+      resourceIds: newTaskResources.slice(),
     }
     const issues = analyzeTaskConflicts(payload, { tasks, events })
     setTaskPlanIssues(issues)
     if (issues.some((i) => i.severity === 'conflict')) return
     await onAddTask(payload)
     form.reset()
+    setLinkedEventDraft('')
+    setNewTaskResources([])
     requestAnimationFrame(() => runTaskPlanCheck())
   }
 
@@ -1129,13 +1565,41 @@ function TasksView({
     .slice()
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
 
+  const me = userEmail.trim().toLowerCase()
+
+  function taskRowCanToggle(t: Task): boolean {
+    if (canCreateTasks) return true
+    const a = (t.assignee || '').trim().toLowerCase()
+    return Boolean(a && a === me)
+  }
+
+  function openTaskResourceEditor(taskId: string) {
+    const t = tasks.find((x) => x.id === taskId)
+    setResourcesEditTaskId(taskId)
+    setDraftResourceIds(t?.resourceIds?.slice() ?? [])
+  }
+
+  async function saveTaskResources() {
+    if (!resourcesEditTaskId) return
+    await onUpdateTask(resourcesEditTaskId, { resourceIds: draftResourceIds.slice() })
+    setResourcesEditTaskId(null)
+  }
+
+  const editingBoardTaskTitle = resourcesEditTaskId
+    ? sorted.find((t) => t.id === resourcesEditTaskId)?.title
+    : undefined
+
+  const editingLockTask = resourcesEditTaskId
+    ? sorted.find((t) => t.id === resourcesEditTaskId)
+    : undefined
+
   return (
     <div className="view">
       <header className="view-header">
         <div>
           <h2>Tasks & collaboration</h2>
           <p>
-            Assign build, software, sponsorship and logistics responsibilities
+            Assign modeling, experiments, writing and logistics responsibilities
             across the team.
           </p>
         </div>
@@ -1159,14 +1623,14 @@ function TasksView({
               <span>Task title</span>
               <input
                 name="title"
-                placeholder="Design shooter wheel mounting"
+                placeholder="Ablation study on attention depth"
                 required
               />
             </label>
             <div className="form-row">
               <label>
                 <span>Assignee</span>
-                <input name="assignee" placeholder="teammate@student.monash.edu" />
+                <input name="assignee" placeholder="researcher@student.monash.edu" />
               </label>
               <label>
                 <span>Due date</span>
@@ -1176,7 +1640,11 @@ function TasksView({
             <div className="form-row">
               <label>
                 <span>Linked event</span>
-                <select name="eventId" defaultValue="">
+                <select
+                  value={linkedEventDraft}
+                  onChange={(e) => setLinkedEventDraft(e.target.value)}
+                  aria-label="Linked event"
+                >
                   <option value="">General club work</option>
                   {events.map((e) => (
                     <option key={e.id} value={e.id}>
@@ -1194,6 +1662,13 @@ function TasksView({
                 </select>
               </label>
             </div>
+            <ResourceAssignPicker
+              resources={resources}
+              value={newTaskResources}
+              onChange={setNewTaskResources}
+              lockedByOtherEvents={lockedResourcesForTaskContext(events, linkedEventDraft)}
+              hint="Attach inventory by search. Items booked on another active event appear only if this task links to that event."
+            />
             <p className="form-hint">
               Use a teammate&apos;s account email as assignee so members can see the task and mark it
               complete.
@@ -1212,42 +1687,99 @@ function TasksView({
             <h3>Task board</h3>
             <p>
               {canCreateTasks
-                ? 'Click to mark work complete as the build progresses.'
+                ? 'Click the task row to toggle completion. Use Resources to assign inventory.'
                 : `Tasks where the assignee is your email (${userEmail}) appear here.`}
             </p>
           </header>
           {sorted.length === 0 ? (
             <p className="empty-state">
-              No tasks yet. Capture mechanical, electrical, software and admin
+              No tasks yet. Capture experiments, evaluation, writing and admin
               work here.
             </p>
           ) : (
-            <ul className="list">
-              {sorted.map((t) => {
-                const event = events.find((e) => e.id === t.eventId)
-                return (
-                  <li
-                    key={t.id}
-                    className={
-                      t.completed ? 'list-row completed selectable' : 'list-row selectable'
-                    }
-                    onClick={() => onToggleTask(t.id)}
-                  >
-                    <div>
-                      <div className="list-title">{t.title}</div>
-                      <div className="list-meta">
-                        <span>{t.assignee || 'Unassigned'}</span>
-                        <span>{t.dueDate || 'No deadline'}</span>
-                        {event && <span>{event.name}</span>}
+            <>
+              <ul className="list">
+                {sorted.map((t) => {
+                  const event = events.find((e) => e.id === t.eventId)
+                  const toggles = taskRowCanToggle(t)
+                  return (
+                    <li
+                      key={t.id}
+                      className={
+                        toggles
+                          ? t.completed
+                            ? 'list-row completed selectable'
+                            : 'list-row selectable'
+                          : 'list-row'
+                      }
+                    >
+                      <div
+                        className="task-board-row-main"
+                        onClick={() => {
+                          if (toggles) void onToggleTask(t.id)
+                        }}
+                        role={toggles ? 'button' : undefined}
+                      >
+                        <div className="list-title">{t.title}</div>
+                        <div className="list-meta">
+                          <span>{t.assignee || 'Unassigned'}</span>
+                          <span>{t.dueDate || 'No deadline'}</span>
+                          {event && <span>{event.name}</span>}
+                          {t.resourceIds?.length ? (
+                            <span title={formatAllocatedResources(t.resourceIds, resources)}>
+                              Resources: {formatAllocatedResources(t.resourceIds, resources)}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
-                    <span className={`badge ${t.priority}`}>
-                      {t.completed ? 'Done' : t.priority}
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
+                      {canCreateTasks ? (
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          onClick={() => {
+                            if (resourcesEditTaskId === t.id) {
+                              setResourcesEditTaskId(null)
+                              return
+                            }
+                            openTaskResourceEditor(t.id)
+                          }}
+                        >
+                          {resourcesEditTaskId === t.id ? 'Close' : 'Resources'}
+                        </button>
+                      ) : null}
+                      <span className={`badge ${t.priority}`}>
+                        {t.completed ? 'Done' : t.priority}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+              {canCreateTasks && resourcesEditTaskId && (
+                <div className="task-resources-editor">
+                  <p className="form-static-label">
+                    Assign resources — {editingBoardTaskTitle ?? 'Task'}
+                  </p>
+                  <ResourceAssignPicker
+                    resources={resources}
+                    value={draftResourceIds}
+                    onChange={setDraftResourceIds}
+                    lockedByOtherEvents={lockedResourcesForTaskContext(
+                      events,
+                      editingLockTask?.eventId ?? '',
+                    )}
+                    hint="Same availability rules as when creating a task."
+                  />
+                  <div className="form-actions">
+                    <button type="button" className="btn ghost" onClick={() => setResourcesEditTaskId(null)}>
+                      Cancel
+                    </button>
+                    <button type="button" className="btn primary" onClick={() => void saveTaskResources()}>
+                      Save resources
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>
@@ -1302,14 +1834,14 @@ function BudgetView({ events, items, onAddItem, onToggleSpent, canAddBudgetLineI
         <section className="panel">
           <header className="panel-header">
             <h3>New budget item</h3>
-            <p>Capture hardware, fabrication, travel and marketing costs.</p>
+            <p>Capture compute, data access, travel and marketing costs.</p>
           </header>
           <form className="form" onSubmit={handleSubmit}>
             <label>
               <span>Item</span>
               <input
                 name="label"
-                placeholder="Aluminium box section (3m)"
+                placeholder="Cloud GPU credits (monthly pool)"
                 required
               />
             </label>
@@ -1587,7 +2119,7 @@ function ProfileView({ user, access }: ProfileViewProps) {
             <input
               value={clubRole}
               onChange={(e) => setClubRole(e.target.value)}
-              placeholder="e.g. Team Lead, Treasurer"
+              placeholder="e.g. Project lead, Reading group chair"
             />
           </label>
           <label>

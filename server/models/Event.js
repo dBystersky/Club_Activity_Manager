@@ -14,6 +14,7 @@ const eventSchema = new mongoose.Schema(
     },
     budgetAllocated: { type: Number, default: 0 },
     members: { type: [String], default: [] },
+    resourceIds: { type: [String], default: [] },
     publicOnCalendar: { type: Boolean, default: false },
   },
   { timestamps: true }

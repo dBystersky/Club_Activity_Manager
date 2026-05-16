@@ -11,7 +11,7 @@ export function PlanningAlerts({ issues }: Props) {
     <div className="planning-alerts">
       {conflicts.length > 0 && (
         <div className="planning-block planning-block--error" role="alert">
-          <div className="planning-block-title">Venue and resource conflicts</div>
+          <div className="planning-block-title">Scheduling conflicts</div>
           <ul className="planning-block-list">
             {conflicts.map((c, idx) => (
               <li key={`c-${idx}`}>{c.message}</li>
@@ -19,7 +19,7 @@ export function PlanningAlerts({ issues }: Props) {
           </ul>
           <p className="planning-block-hint">
             Saving is blocked until these are resolved or you adjust date, location, assignee, or
-            team members.
+            collaborators.
           </p>
         </div>
       )}

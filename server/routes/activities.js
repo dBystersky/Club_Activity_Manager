@@ -1,8 +1,9 @@
 import { Router } from 'express'
-import { authMiddleware } from '../middleware/auth.js'
+import { authMiddleware, requireAdmin } from '../middleware/auth.js'
 import { ClubEvent } from '../models/Event.js'
 import { Task } from '../models/Task.js'
 import { BudgetItem } from '../models/BudgetItem.js'
+import { Resource } from '../models/Resource.js'
 import {
   escapeRegex,
   membersListsEqual,
@@ -28,6 +29,53 @@ async function sharedEventIdStrings(email) {
   return ids.map((id) => id.toString())
 }
 
+function normalizeResourceIds(body) {
+  const raw = body.resourceIds
+  if (!Array.isArray(raw)) return []
+  return raw.map((id) => String(id).trim()).filter(Boolean)
+}
+
+/** Active events (planning/confirmed) cannot share the same inventory resource. */
+async function findActiveEventResourceConflict(resourceIds, excludeMongoEventId) {
+  const ids = [...new Set(resourceIds)]
+  if (!ids.length) return null
+  const q = {
+    status: { $ne: 'completed' },
+    resourceIds: { $in: ids },
+  }
+  if (excludeMongoEventId) q._id = { $ne: excludeMongoEventId }
+  const doc = await ClubEvent.findOne(q).select('name resourceIds').lean()
+  if (!doc) return null
+  return {
+    message: `Resource already allocated to active event "${doc.name || 'another event'}"`,
+  }
+}
+
+/**
+ * Task may reference a resource only if no active event holds it, or only the linked event holds it.
+ */
+async function assertTaskResourcesAllowed(resourceIds, taskEventIdStr) {
+  const ids = [...new Set(resourceIds)]
+  const eid = typeof taskEventIdStr === 'string' ? taskEventIdStr.trim() : ''
+  for (const rid of ids) {
+    const owners = await ClubEvent.find({
+      status: { $ne: 'completed' },
+      resourceIds: rid,
+    })
+      .select('_id name')
+      .lean()
+    if (!owners.length) continue
+    if (owners.length > 1) {
+      return 'Multiple active events reference this resource — contact an admin.'
+    }
+    const ownerId = owners[0]._id.toString()
+    if (!eid || ownerId !== eid) {
+      return `Resource is allocated to active event "${owners[0].name}". Link this task to that event or pick another item.`
+    }
+  }
+  return null
+}
+
 /** Persist only schema fields; normalise publicOnCalendar so it always saves correctly. */
 function eventWritePayload(body) {
   const members = Array.isArray(body.members) ? body.members : []
@@ -51,12 +99,78 @@ function eventWritePayload(body) {
       ? Number(body.budgetAllocated)
       : 0,
     members,
+    resourceIds: normalizeResourceIds(body),
     publicOnCalendar,
+  }
+}
+
+function taskWritePayload(body) {
+  return {
+    title: typeof body.title === 'string' ? body.title : String(body.title ?? ''),
+    assignee: typeof body.assignee === 'string' ? body.assignee : String(body.assignee ?? ''),
+    dueDate: typeof body.dueDate === 'string' ? body.dueDate : String(body.dueDate ?? ''),
+    eventId: typeof body.eventId === 'string' ? body.eventId : String(body.eventId ?? ''),
+    priority: ['low', 'medium', 'high'].includes(body.priority) ? body.priority : 'medium',
+    resourceIds: normalizeResourceIds(body),
+  }
+}
+
+/** Partial updates for PATCH — only keys present on `body` are returned. */
+function taskPatchPayload(body) {
+  const out = {}
+  if ('title' in body) {
+    out.title = typeof body.title === 'string' ? body.title : String(body.title ?? '')
+  }
+  if ('assignee' in body) {
+    out.assignee =
+      typeof body.assignee === 'string' ? body.assignee : String(body.assignee ?? '')
+  }
+  if ('dueDate' in body) {
+    out.dueDate = typeof body.dueDate === 'string' ? body.dueDate : String(body.dueDate ?? '')
+  }
+  if ('eventId' in body) {
+    out.eventId = typeof body.eventId === 'string' ? body.eventId : String(body.eventId ?? '')
+  }
+  if ('priority' in body) {
+    out.priority = ['low', 'medium', 'high'].includes(body.priority)
+      ? body.priority
+      : 'medium'
+  }
+  if ('resourceIds' in body) {
+    out.resourceIds = normalizeResourceIds(body)
+  }
+  if ('completed' in body && typeof body.completed === 'boolean') {
+    out.completed = body.completed
+  }
+  return out
+}
+
+function resourceToJson(r) {
+  const o = r.toObject()
+  return {
+    id: r._id.toString(),
+    name: o.name,
+    storageLocation: o.storageLocation ?? '',
+    type: o.type ?? '',
+    createdAt: o.createdAt,
+    updatedAt: o.updatedAt,
   }
 }
 
 function taskToJson(t) {
   return { ...t.toObject(), id: t._id.toString() }
+}
+
+function dedupeTasksById(docs) {
+  const seen = new Set()
+  const out = []
+  for (const t of docs) {
+    const sid = t._id.toString()
+    if (seen.has(sid)) continue
+    seen.add(sid)
+    out.push(t)
+  }
+  return out
 }
 
 // Events – member: only where listed as collaborator; manager/admin: owned + shared
@@ -116,6 +230,11 @@ router.post('/events', async (req, res) => {
     payload = { ...payload, members: [] }
   }
 
+  const conflict = await findActiveEventResourceConflict(payload.resourceIds, null)
+  if (conflict) {
+    return res.status(400).json({ error: conflict.message })
+  }
+
   const ev = await ClubEvent.create({
     ...payload,
     userId: req.user._id,
@@ -146,6 +265,11 @@ router.patch('/events/:id', async (req, res) => {
     if (!membersListsEqual(payload.members, ev.members)) {
       return res.status(403).json({ error: 'Managers cannot change event collaborators' })
     }
+  }
+
+  const conflict = await findActiveEventResourceConflict(payload.resourceIds, ev._id)
+  if (conflict) {
+    return res.status(400).json({ error: conflict.message })
   }
 
   const updated = await ClubEvent.findByIdAndUpdate(
@@ -189,11 +313,18 @@ router.get('/tasks', async (req, res) => {
   if (lv === 'member') {
     const sharedIds = await sharedEventIdStrings(email)
     const assigneeRe = new RegExp(`^${escapeRegex(email)}$`, 'i')
-    const tasks = await Task.find({
-      assignee: assigneeRe,
-      $or: [{ eventId: { $in: sharedIds } }, { eventId: '' }, { eventId: { $exists: false } }],
-    })
-    return res.json(tasks.map(taskToJson))
+    const batches = []
+    if (sharedIds.length > 0) {
+      batches.push(await Task.find({ eventId: { $in: sharedIds } }))
+    }
+    batches.push(
+      await Task.find({
+        assignee: assigneeRe,
+        $or: [{ eventId: '' }, { eventId: { $exists: false } }],
+      }),
+    )
+    const merged = dedupeTasksById(batches.flat())
+    return res.json(merged.map(taskToJson))
   }
 
   const ownedIds = await ownedEventIdStrings(req.user._id)
@@ -210,7 +341,16 @@ router.post('/tasks', async (req, res) => {
   if (level(req) === 'member') {
     return res.status(403).json({ error: 'Members cannot create tasks' })
   }
-  const t = await Task.create({ ...req.body, userId: req.user._id })
+  const payload = taskWritePayload(req.body)
+  const taskErr = await assertTaskResourcesAllowed(payload.resourceIds, payload.eventId)
+  if (taskErr) {
+    return res.status(400).json({ error: taskErr })
+  }
+  const t = await Task.create({
+    ...payload,
+    completed: false,
+    userId: req.user._id,
+  })
   res.status(201).json(taskToJson(t))
 })
 
@@ -252,12 +392,47 @@ router.patch('/tasks/:id', async (req, res) => {
     return res.status(403).json({ error: 'Task not found' })
   }
 
-  const updated = await Task.findByIdAndUpdate(
-    req.params.id,
-    { $set: req.body },
-    { new: true },
-  )
+  const patch = taskPatchPayload(req.body)
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'No valid fields to update' })
+  }
+
+  const mergedEventId =
+    patch.eventId !== undefined ? String(patch.eventId || '').trim() : String(t.eventId || '').trim()
+  const mergedResources =
+    patch.resourceIds !== undefined ? patch.resourceIds : t.resourceIds || []
+
+  const taskErr = await assertTaskResourcesAllowed(mergedResources, mergedEventId)
+  if (taskErr) {
+    return res.status(400).json({ error: taskErr })
+  }
+
+  const updated = await Task.findByIdAndUpdate(req.params.id, { $set: patch }, { new: true })
   res.json(taskToJson(updated))
+})
+
+router.delete('/tasks/:id', async (req, res) => {
+  if (level(req) === 'member') {
+    return res.status(403).json({ error: 'Members cannot delete tasks' })
+  }
+
+  const email = userEmail(req)
+  const t = await Task.findById(req.params.id)
+  if (!t) return res.status(404).json({ error: 'Task not found' })
+
+  const ownedIds = await ownedEventIdStrings(req.user._id)
+  const sharedIds = await sharedEventIdStrings(email)
+  const eventScope = new Set([...ownedIds, ...sharedIds])
+  const onOwnTask = t.userId.toString() === req.user._id.toString()
+  const eid = t.eventId || ''
+  const onScopedEvent = eid && eventScope.has(String(eid))
+
+  if (!onOwnTask && !onScopedEvent) {
+    return res.status(403).json({ error: 'Task not found' })
+  }
+
+  await Task.findByIdAndDelete(req.params.id)
+  res.status(204).send()
 })
 
 // Budget items
@@ -288,6 +463,54 @@ router.patch('/budget/:id', async (req, res) => {
   )
   if (!b) return res.status(404).json({ error: 'Budget item not found' })
   res.json({ ...b.toObject(), id: b._id.toString() })
+})
+
+// Club inventory (MongoDB collection). Read: any authenticated user (for allocations).
+// Create / delete: admin only.
+router.get('/resources', async (_req, res) => {
+  const list = await Resource.find().sort({ name: 1 }).lean()
+  res.json(
+    list.map((row) => ({
+      id: row._id.toString(),
+      name: row.name,
+      storageLocation: row.storageLocation ?? '',
+      type: row.type ?? '',
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    })),
+  )
+})
+
+router.post('/resources', requireAdmin, async (req, res) => {
+  const name =
+    typeof req.body.name === 'string' ? req.body.name.trim() : String(req.body.name ?? '').trim()
+  if (!name) {
+    return res.status(400).json({ error: 'Resource name is required' })
+  }
+  const storageLocation =
+    typeof req.body.storageLocation === 'string'
+      ? req.body.storageLocation.trim()
+      : String(req.body.storageLocation ?? '').trim()
+  const type =
+    typeof req.body.type === 'string'
+      ? req.body.type.trim()
+      : String(req.body.type ?? '').trim()
+
+  const created = await Resource.create({ name, storageLocation, type })
+  res.status(201).json(resourceToJson(created))
+})
+
+router.delete('/resources/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params.id || '').trim()
+  const doc = await Resource.findByIdAndDelete(id)
+  if (!doc) return res.status(404).json({ error: 'Resource not found' })
+
+  await Promise.all([
+    ClubEvent.updateMany({ resourceIds: id }, { $pull: { resourceIds: id } }),
+    Task.updateMany({ resourceIds: id }, { $pull: { resourceIds: id } }),
+  ])
+
+  res.status(204).send()
 })
 
 export default router

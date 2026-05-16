@@ -251,7 +251,7 @@ export function UsersAdminPanel({ currentUserId, onCurrentUserUpdated }: UsersAd
                 <input
                   value={editClubRole}
                   onChange={(e) => setEditClubRole(e.target.value)}
-                  placeholder="e.g. Mechanical lead"
+                  placeholder="e.g. Reading group chair"
                 />
               </label>
               <label>

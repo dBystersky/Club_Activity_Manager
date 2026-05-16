@@ -123,12 +123,20 @@ export const activitiesApi = {
     request<TaskDoc>('/tasks', { method: 'POST', body: JSON.stringify(body) }),
   updateTask: (id: string, body: Partial<TaskDoc>) =>
     request<TaskDoc>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteTask: (id: string) =>
+    request<void>(`/tasks/${id}`, { method: 'DELETE' }),
 
   getBudgetItems: () => request<Array<BudgetItemDoc>>('/budget'),
   createBudgetItem: (body: Omit<BudgetItemDoc, 'id'>) =>
     request<BudgetItemDoc>('/budget', { method: 'POST', body: JSON.stringify(body) }),
   updateBudgetItem: (id: string, body: Partial<BudgetItemDoc>) =>
     request<BudgetItemDoc>(`/budget/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  getResources: () => request<ResourceDoc[]>('/resources'),
+  createResource: (body: Pick<ResourceDoc, 'name' | 'storageLocation' | 'type'>) =>
+    request<ResourceDoc>('/resources', { method: 'POST', body: JSON.stringify(body) }),
+  deleteResource: (id: string) =>
+    request<void>(`/resources/${id}`, { method: 'DELETE' }),
 }
 
 export interface AuthUser {
@@ -147,6 +155,7 @@ export interface EventDoc {
   status: string
   budgetAllocated: number
   members?: string[]
+  resourceIds?: string[]
   isOwner?: boolean
   ownerEmail?: string
   publicOnCalendar?: boolean
@@ -160,6 +169,14 @@ export interface TaskDoc {
   dueDate: string
   priority: string
   completed: boolean
+  resourceIds?: string[]
+}
+
+export interface ResourceDoc {
+  id: string
+  name: string
+  storageLocation: string
+  type: string
 }
 
 export interface BudgetItemDoc {
